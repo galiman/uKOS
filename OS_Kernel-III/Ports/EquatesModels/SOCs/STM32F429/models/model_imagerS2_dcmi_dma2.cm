@@ -1,0 +1,885 @@
+/*
+; model_imagerS2_dcmi_dma2.
+; =========================
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2016-05-04
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 184                  $:  Revision of last commit
+; $Date:: 2017-07-17 10:50:19#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "imagers2" device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+extern				void		(*vExce_indIntVectors[KNBINTERRUPTIONS])(void);
+extern	volatile	uint16_t	vTimeException;
+static				void		(*vHSyncCodeRoutine)(void) = NULL;
+static				void		(*vFrameCodeRoutine)(void) = NULL;
+static				void		(*vVSyncCodeRoutine)(void) = NULL;
+static				void		(*vDMAEcCodeRoutine)(void) = NULL;
+static	volatile	bool_t		vIMSema    		   = FALSE;
+static	volatile	bool_t		vVSSema    		   = FALSE;
+static	volatile	uint8_t		vImgLatch  		   = 0;
+static	volatile	uint8_t		vPage      		   = 0;
+static				uint8_t		*vImageI0  		   = NULL;
+static				uint8_t		*vImageE0  		   = NULL;
+static				uint8_t		*vImageE1  		   = NULL;
+static				uint8_t		*vXferLine 		   = NULL;
+static  volatile	uint8_t		vAcqMode   		   = KSNAP;
+static  volatile	uint8_t		vPixMode   		   = KLUMINANCE8;
+static  volatile	uint8_t		vAcqPage   		   = KINTERNAL;
+static	volatile	uint32_t	vSize      		   = 1;
+static	volatile	uint32_t	vNbRows    		   = 0;
+static	volatile	uint32_t	vNbCols    		   = 0;
+static	volatile	uint32_t	vNbPixels  		   = 0;
+
+// Orders
+//
+// Order_RID -> Read the P4 register
+// Order_STA -> Set the prog delay with DAU_FRAME_START_BLANK
+// Order_END -> Set the prog delay with DAU_FRAME_END_BLANK
+// Order_HOR -> Set the prog delay with DAU_FRAME_HORIZ_BLANK
+// Order_VG0 -> Set pixel bias 0
+// Order_VG8 -> Set pixel bias 8
+// Order_VG9 -> Set pixel bias 9
+// Order_VGA -> Set pixel bias 10
+// Order_SYN -> Enable DAU PPI to sync mode (DAU0_SYNC_MODE)
+// Order_PIX -> Set the pixel mode (contrast)
+// Order_CFG -> Set auto and run free mode
+
+//                                             uint8_t                 uint32_t                         uint8_t                 bool_t    uint32_t  uint32_t
+//                                             oSPICmd2                oRegister                        oSPICmd4                oRdDummy  oNbParam  oParam
+        			       
+const				S2Order_t	aOrder_STA = { SPI_CMD_WRITE_2_BYTE,   REG_DAU_START_BLANK,			    -1,                     FALSE,	  2,        32		   };	// Blanking at start frame
+const				S2Order_t	aOrder_END = { SPI_CMD_WRITE_2_BYTE,   REG_DAU_END_BLANK,			    -1,                     FALSE,	  2,        32		   };	// Blanking at end frame
+const				S2Order_t	aOrder_HOR = { SPI_CMD_WRITE_2_BYTE,   REG_DAU_HORIZ_BLANK,		        -1,                     FALSE,	  2,        512		   };	// Horizontale blanking
+const				S2Order_t	aOrder_VG0 = { SPI_CMD_WRITE_1_BYTE,   REG_DAU_DAC0,					-1,                     FALSE,	  1,        5		   };	//
+const				S2Order_t	aOrder_VG8 = { SPI_CMD_WRITE_1_BYTE,   REG_DAU_DAC8,					-1,                     FALSE,	  1,        160		   };	//
+const				S2Order_t	aOrder_VG9 = { SPI_CMD_WRITE_1_BYTE,   REG_DAU_DAC9,					-1,                     FALSE,	  1,        100		   };	//
+const				S2Order_t	aOrder_VGA = { SPI_CMD_WRITE_1_BYTE,   REG_DAU_DAC10,					-1,                     FALSE,	  1,        10 		   };	// DAC by default
+const				S2Order_t	aOrder_SWD = { SPI_CMD_WRITE_4_BYTE,   REG_S2_DAU_BL_STRONG_WEAK_DELAY, -1,                     FALSE,	  4,        400000000  };	// DAC by default
+static				S2Order_t	aOrder_SYN = { SPI_CMD_WRITE_1_BYTE,   REG_DAU_SYNC_MODE,				-1,                     FALSE,	  1,        0x00000002 };	//
+static				S2Order_t	aOrder_PIX = { SPI_CMD_WRITE_1_BYTE,   REG_DAU_PIXEL_MODE,			    -1,                     FALSE,	  1,        KLUM8      };	// Pixel mode (luminance 8 bits)       
+static				S2Order_t	aOrder_CFG = { SPI_CMD_WRITE_2_BYTE,   REG_S2_CFG,     				    -1,                     FALSE,	  2,        0x000000C2 };	// S2 mode
+static				S2Order_t	aOrder_WLU = { SPI_CMD_WRITE_4_BYTE,   0x60000,     				    -1,                     FALSE,	  4,        0          };	// Write the LUT
+
+#if (defined(__WITHSEMA__))
+static	volatile	sema_t		*vSeHandleIM[1];
+static	volatile	sema_t		*vSeHandleVS[1];
+#endif
+
+// Module strings
+// ==============
+
+#if (defined(__WITHSEMA__))
+LOC_CONST_STRG(aStrSemaphoreIM[]) =	KSEMAPHORE_IMAGERS2IM;
+LOC_CONST_STRG(aStrSemaphoreVS[]) =	KSEMAPHORE_IMAGERS2VS;
+#endif
+
+// Prototypes
+// ==========
+
+static	int32_t	_initIMS2(void);
+static	int32_t	_initDCMI(void);
+static	int32_t	_initDMA2(void);
+static	int32_t	_confMode(const cnfImagerS2_t *configure);
+static	int32_t	_confMemo(const cnfImagerS2_t *configure);
+static	int32_t	_confPixe(const cnfImagerS2_t *configure);
+static	int32_t	_confImag(const cnfImagerS2_t *configure);
+static	bool_t	_writeS2(const S2Order_t *order);
+static	bool_t	_readS2(S2Order_t *order);
+static	bool_t	_waitingForReady(void);
+static	void	aDCMI_IRQHandler(void);
+static	void	aDMA2_Stream0_IRQHandler(void);
+static	void	aDMA2_Stream1_IRQHandler(void);
+
+/*
+ * \brief imagerS2_init
+ *
+ * - Initialize the manager
+ *
+ */
+int32_t	imagerS2_init(void) {
+	int32_t		status;
+
+// Initialize the used interfaces
+
+	cb_control(KINIT);
+
+	status = _initIMS2(); if (status != KIMAGERS2NOERR) { return (status); }
+	status = _initDCMI(); if (status != KIMAGERS2NOERR) { return (status); }
+	status = _initDMA2(); if (status != KIMAGERS2NOERR) { return (status); }
+
+// Create the semaphores
+
+	#if (defined(__WITHSEMA__))
+	kern_createSyncSemaphore(aStrSemaphoreIM, &vSeHandleIM[0]);
+	kern_createSyncSemaphore(aStrSemaphoreVS, &vSeHandleVS[0]);
+	#endif
+
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief imagerS2_configure
+ *
+ * - Configure the manager
+ *
+ */
+int32_t	imagerS2_configure(const cnfImagerS2_t *configure) {
+	int32_t		status = KIMAGERS2NOERR;
+
+// Stop the DMA streams
+
+	DMA2_Stream1->CR = 0x00000000;
+	DCMI->CR         = 0x00000000;
+	DCMI->IER        = 0x00000000;
+
+	vAcqMode  = configure->oAcqMode;
+	vPixMode  = configure->oPixMode;
+	vAcqPage  = configure->oAcqPage;
+	vNbRows   = configure->oNbRows;
+	vNbCols   = configure->oNbCols;
+	vNbPixels = configure->oNbRows * configure->oNbCols;
+
+// Configure the manager
+
+	status = _confMode(configure); if (status != KIMAGERS2NOERR) { return (status); }
+	status = _confPixe(configure); if (status != KIMAGERS2NOERR) { return (status); }
+	status = _confMemo(configure); if (status != KIMAGERS2NOERR) { return (status); }
+	status = _confImag(configure); if (status != KIMAGERS2NOERR) { return (status); }
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF1
+				| DMA_LIFCR_CHTIF1
+				| DMA_LIFCR_CTEIF1
+				| DMA_LIFCR_CDMEIF1
+				| DMA_LIFCR_CFEIF1
+				| DMA_LIFCR_CTCIF0
+				| DMA_LIFCR_CHTIF0
+				| DMA_LIFCR_CTEIF0
+				| DMA_LIFCR_CDMEIF0
+				| DMA_LIFCR_CFEIF0;
+
+	DMA2_Stream1->CR |= DMA_SxCR_EN;
+	DCMI->CR  		 |= DCMI_CR_CROP
+					 |  DCMI_CR_PCKPOL
+					 |  DCMI_CR_ENABLE;
+
+	if (configure->oAcqMode == KSNAP) {
+		kern_suspendProcess(10);
+	}
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief imagerS2_acquisition
+ *
+ * - Acquisition of an image on the device
+ *
+ */
+int32_t	imagerS2_acquisition(void) {
+	static	bool_t	first = TRUE;
+
+	switch (vAcqMode) {
+		case KCONT: {
+			DMA2_Stream1->CR |= DMA_SxCR_EN;
+			DCMI->CR         |= DCMI_CR_CAPTURE;
+			break;
+		}
+
+// Before starting with the SNAP mode it is necessary to:
+// - Waiting for the end of the current frame (40-ms)
+// - Acknowledge the H & V interruption
+
+		default:
+		case KSNAP: {
+			if (first) {
+				kern_suspendProcess(40);
+				DCMI->ICR = DCMI_ICR_LINE_ISC;
+				DCMI->ICR = DCMI_ICR_FRAME_ISC;
+				DCMI->ICR = DCMI_ICR_VSYNC_ISC;
+				first = FALSE;
+			}
+			DMA2_Stream1->CR |= DMA_SxCR_EN;
+			DCMI->CR         |= DCMI_CR_CAPTURE;
+
+			cb_control(KTRIGS2);
+			break;
+		}
+	}
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief imagerS2_getImage
+ *
+ * - Get the image pointer
+ *
+ */
+int32_t	imagerS2_getImage(void **image) {
+
+	if (vImageI0 != NULL) { *image = (void *)(vImageI0); return (KIMAGERS2NOERR); }
+	if (vPage    == 0)    { *image = (void *)(vImageE0); return (KIMAGERS2NOERR); }
+	else 			      { *image = (void *)(vImageE1); return (KIMAGERS2NOERR); }
+}
+
+/*
+ * \brief imagerS2_ctrlLeds
+ *
+ * - Control the LEDs
+ *
+ */
+int32_t	imagerS2_ctrlLeds(uint8_t ledState) {
+
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief imagerS2_getRegister
+ *
+ * - Get an imager register
+ *
+ */
+int32_t	imagerS2_getRegister(S2Order_t *order) {
+	int32_t		status;
+
+	status = KIMAGERS2NOERR;
+	if (!_readS2(order)) { status = KIMAGERS2TIMEO; }
+	return (status);
+}
+
+/*
+ * \brief imagerS2_putRegister
+ *
+ * - Put an image register
+ *
+ */
+int32_t	imagerS2_putRegister(const S2Order_t *order) {
+	int32_t		status;
+
+	status = KIMAGERS2NOERR;
+	if (!_writeS2(order)) { status = KIMAGERS2TIMEO; }
+	return (status);
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief _initIMS2
+ *
+ * - Initialize the S2 registers including ROI, exposure, LUT, etc.
+ *
+ */
+static	int32_t	_initIMS2(void) {
+	uint16_t	i;
+
+// Set the prog delay with DAU_FRAME_START_BLANK
+// Set the prog delay with DAU_FRAME_END_BLANK
+// Set the prog delay with DAU_FRAME_HORIZ_BLANK
+// Set pixel bias 0
+// Set pixel bias 8
+// Set pixel bias 9
+// Set pixel bias 10
+// Enable DAU PPI to sync mode (DAU0_SYNC_MODE)
+// Set the pixel mode (contrast)
+// Set auto and run free mode
+
+	if (!_writeS2(&aOrder_STA))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_END))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_HOR))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_VG0))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_VG8))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_VG9))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_VGA))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_SWD))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_SYN))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_PIX))		{ return (KIMAGERS2TIMEO); }
+	if (!_writeS2(&aOrder_CFG))		{ return (KIMAGERS2TIMEO); }
+
+// Load the LUT
+
+	for (i = 0; i < 1024; i++) {
+		aOrder_WLU.oRegister = 0x60000 + (i*4);
+		aOrder_WLU.oParam    = aTabLUTDay[i];
+		if (!_writeS2(&aOrder_WLU)) { return (KIMAGERS2TIMEO); }
+	}
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief _initDCMI
+ *
+ * - Initialize the DCMI
+ *
+ */
+static	int32_t	_initDCMI(void) {
+
+	RCC->AHB2ENR |= RCC_AHB2ENR_DCMIEN;
+
+	vExce_indIntVectors[DCMI_IRQn]	= aDCMI_IRQHandler;
+	NVIC->IP[DCMI_IRQn]     		= (KINT_LEVEL_PERIPH<<4);
+	NVIC->ISER[2]           	   |= (1<<(DCMI_IRQn & 0x1F));
+
+	DCMI->CR	  = 0x00000000;
+	DCMI->IER     = 0x00000000;
+	DCMI->CWSTRTR = (0<<16) | 0;
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief _initDMA2
+ *
+ * - Initialize the DMA2 stream 1 for the DCMI transfer
+ *						 stream 0 for the memory-to-memory transfer
+ *
+ */
+static	int32_t	_initDMA2(void) {
+
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;
+
+	vExce_indIntVectors[DMA2_Stream1_IRQn] 	= aDMA2_Stream1_IRQHandler;
+	vExce_indIntVectors[DMA2_Stream0_IRQn] 	= aDMA2_Stream0_IRQHandler;
+	NVIC->IP[DMA2_Stream1_IRQn]				= (KINT_LEVEL_PERIPH<<4);
+	NVIC->IP[DMA2_Stream0_IRQn]				= (KINT_LEVEL_PERIPH<<4);
+	NVIC->ISER[1]						   |= (1<<(DMA2_Stream1_IRQn & 0x1F));
+	NVIC->ISER[1]						   |= (1<<(DMA2_Stream0_IRQn & 0x1F));
+
+// Stream 1 (DCMI to vLine or to vImage) transfer
+//
+// Direct mode disable
+// FIFO full
+// Select the channel 1 (stream 1)
+// Priority medium
+// Memory size 32-bits
+// Peripheral size 32-bits
+// Memory auto incremented
+// Transfer complete interruption
+
+	DMA2_Stream1->CR  = 0x00000000;
+	DMA2_Stream1->PAR = (uint32_t)(DCMI_BASE+0x28);
+	DMA2_Stream1->FCR = DMA_SxFCR_DMDIS										
+					  | DMA_SxFCR_FTH_1										
+					  | DMA_SxFCR_FTH_0;
+
+	DMA2_Stream1->CR = DMA_SxCR_CHSEL_0										
+					 | DMA_SxCR_PL_0											
+					 | DMA_SxCR_MSIZE_1										
+					 | DMA_SxCR_PSIZE_1										
+					 | DMA_SxCR_MINC											
+					 | DMA_SxCR_TCIE;
+
+// Stream 0 (vLine to vImageEx(i)) transfer
+//
+// Direct mode disable
+// FIFO full
+// Select the channel 1 (stream 0)
+// Priority high
+// Source size 32-bits
+// Destination size 32-bits
+// Source auto incremented
+// Destination auto incremented
+// Memory-to-memory
+// Transfer complete interruption
+// Burst xfers of 4 x 32-bits
+
+	DMA2_Stream0->CR  = 0x00000000;
+	DMA2_Stream0->PAR = (uint32_t)vXferLine;
+	DMA2_Stream0->FCR = DMA_SxFCR_DMDIS
+					  | DMA_SxFCR_FTH_1
+					  | DMA_SxFCR_FTH_0;
+
+	DMA2_Stream0->CR = DMA_SxCR_CHSEL_0
+					 | DMA_SxCR_PL_1
+					 | DMA_SxCR_MSIZE_1
+					 | DMA_SxCR_PSIZE_1
+					 | DMA_SxCR_MINC
+					 | DMA_SxCR_PINC
+					 | DMA_SxCR_DIR_1
+					 | DMA_SxCR_TCIE
+					 | DMA_SxCR_MBURST_0
+					 | DMA_SxCR_PBURST_0;
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF1
+				| DMA_LIFCR_CHTIF1
+				| DMA_LIFCR_CTEIF1
+				| DMA_LIFCR_CDMEIF1
+				| DMA_LIFCR_CFEIF1
+				| DMA_LIFCR_CTCIF0
+				| DMA_LIFCR_CHTIF0
+				| DMA_LIFCR_CTEIF0
+				| DMA_LIFCR_CDMEIF0
+				| DMA_LIFCR_CFEIF0;
+
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief _confMode
+ *
+ * - Configure the acquisition mode [ KCONT, KSNAP, KSYNC ]
+ *
+ */
+static	int32_t	_confMode(const cnfImagerS2_t *configure) {
+
+	switch (configure->oAcqMode) {
+
+// Select the channel 1 (stream 1)
+//
+// Priority medium
+// Memory size 32-bits
+// Peripheral size 32-bits
+// Memory auto incremented
+// Transfer complete interruption
+// Circular mode
+
+		case KCONT: {
+			DMA2_Stream1->CR = DMA_SxCR_CHSEL_0						
+							 | DMA_SxCR_PL_0							
+							 | DMA_SxCR_MSIZE_1						
+							 | DMA_SxCR_PSIZE_1						
+							 | DMA_SxCR_MINC							
+							 | DMA_SxCR_TCIE							
+							 | DMA_SxCR_CIRC;
+
+			break;
+		}
+
+// Select the channel 1 (stream 1)
+//
+// Priority medium
+// Memory size 32-bits
+// Peripheral size 32-bits
+// Memory auto incremented
+// Transfer complete interruption
+// Capture mode
+
+		default:
+		case KSNAP: {
+			DMA2_Stream1->CR = DMA_SxCR_CHSEL_0						
+							 | DMA_SxCR_PL_0							
+							 | DMA_SxCR_MSIZE_1						
+							 | DMA_SxCR_PSIZE_1						
+							 | DMA_SxCR_MINC							
+							 | DMA_SxCR_TCIE;
+
+			DCMI->CR |= DCMI_CR_CM;
+			break;
+		}
+		case KSYNC:	{
+			break;
+		}
+	}
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief _confPixe
+ *
+ * - Configure the pixel mode [ LUMINANCE 8-16, CONTRAST 8-16, ORICON 8-16 ]
+ *
+ */
+static	int32_t	_confPixe(const cnfImagerS2_t *configure) {
+	uint32_t	ndtr;
+
+	if (configure->oAcqPage == KINTERNAL) { ndtr = vNbPixels; }
+	else								  { ndtr = vNbCols;   }
+
+	vSize              = 2;
+	DMA2_Stream0->NDTR = vNbCols/2;
+	DMA2_Stream1->NDTR = ndtr/2;
+
+	switch (configure->oPixMode) {												
+		default:
+		case KLUMINANCE8: {
+			vSize = 1;
+			DMA2_Stream0->NDTR = vNbCols/4;
+			DMA2_Stream1->NDTR = ndtr/4;
+			aOrder_PIX.oParam = KLUM8;
+			if (!_writeS2(&aOrder_PIX))	{ return (KIMAGERS2TIMEO); }
+			break;
+		}
+		case KLUMINANCE10: {
+			DCMI->CR |= DCMI_CR_EDM_0;
+			aOrder_PIX.oParam = KLUM10;
+			if (!_writeS2(&aOrder_PIX))	{ return (KIMAGERS2TIMEO); }
+			break;
+		}
+		case KCONTRAST8:	{
+			vSize = 1;
+			DMA2_Stream0->NDTR = vNbCols/4;
+			DMA2_Stream1->NDTR = ndtr/4;
+			aOrder_PIX.oParam = KCON8;
+			if (!_writeS2(&aOrder_PIX))	{ return (KIMAGERS2TIMEO); }
+			break;
+		}
+		case KCONTRAST10:	{
+			DCMI->CR |= DCMI_CR_EDM_0;
+			aOrder_PIX.oParam = KCON10;
+			if (!_writeS2(&aOrder_PIX))	{ return (KIMAGERS2TIMEO); }
+			break;
+		}
+		case KORICON8: {
+			vSize = 1;
+			DMA2_Stream0->NDTR = vNbCols/4;
+			DMA2_Stream1->NDTR = ndtr/4;
+			aOrder_PIX.oParam = KEDG8;
+			if (!_writeS2(&aOrder_PIX))	{ return (KIMAGERS2TIMEO); }
+			break;
+		}
+		case KORICON10: {
+			DCMI->CR |= DCMI_CR_EDM_0;
+			aOrder_PIX.oParam = KEDG10;
+			if (!_writeS2(&aOrder_PIX))	{ return (KIMAGERS2TIMEO); }
+			break;
+		}
+	}
+	return (KIMAGERS2NOERR);
+}
+
+/*
+ * \brief _confMemo
+ *
+ * - Configure the memory buffers
+ *
+ */
+static	int32_t	_confMemo(const cnfImagerS2_t *configure) {
+	int32_t		status = KIMAGERS2NOERR;
+
+	if (vXferLine != NULL) { syos_free(vXferLine); }
+	if (vImageI0  != NULL) { syos_free(vImageI0);  }
+	if (vImageE0  != NULL) { syos_free(vImageE0);  }
+	if (vImageE1  != NULL) { syos_free(vImageE1);  }
+
+	switch (configure->oAcqPage) {
+		case KINTERNAL: {
+			vXferLine = NULL;
+			vImageI0  = (uint8_t *)syos_malloc(KINTERNAL, (vNbPixels*vSize));
+			if (vImageI0 == NULL) { status = KIMAGERS2NOMEM; }
+
+			DMA2_Stream1->M0AR = (uint32_t)vImageI0;
+			break;
+		}
+		default:
+		case KEXTERNAL: {
+			vPage	  = 1;
+			vXferLine = (uint8_t *)syos_malloc(KINTERNAL, (vNbCols*vSize));
+			vImageE0  = (uint8_t *)syos_malloc(KEXTERNAL, (vNbPixels*vSize));
+			vImageE1  = (uint8_t *)syos_malloc(KEXTERNAL, (vNbPixels*vSize));
+
+			if (vXferLine == NULL) { status = KIMAGERS2NOMEM; }
+			if (vImageE0  == NULL) { status = KIMAGERS2NOMEM; }
+			if (vImageE1  == NULL) { status = KIMAGERS2NOMEM; }
+
+			DMA2_Stream0->PAR  = (uint32_t)vXferLine;
+			DMA2_Stream0->M0AR = (uint32_t)vImageE0;
+			DMA2_Stream1->M0AR = (uint32_t)vXferLine;
+			break;
+		}
+	}
+	return (status);
+}
+
+/*
+ * \brief _confImag
+ *
+ * - Configure the imager
+ *
+ */
+static	int32_t	_confImag(const cnfImagerS2_t *configure) {
+	int32_t		status = KIMAGERS2NOERR;
+
+// The crop window area
+
+	if ((configure->oNbRows + configure->oStRows) > KNBROWS) { return (KIMAGERS2CNERR); }
+	if ((configure->oNbCols + configure->oStCols) > KNBCOLS) { return (KIMAGERS2CNERR); }
+	DCMI->CWSIZER = ((configure->oNbRows-1)<<16) | (configure->oNbCols-1);
+	DCMI->CWSTRTR = ( configure->oStRows   <<16) | (configure->oStCols);
+
+// The semaphore mode
+
+	vIMSema = ((configure->oKernSync & (1<<BIMSEMA)) != 0) ? TRUE : FALSE;
+	vVSSema = ((configure->oKernSync & (1<<BVSSEMA)) != 0) ? TRUE : FALSE;
+
+// The interruption callbacks
+// Start the stream
+
+	vHSyncCodeRoutine = configure->oHSync;
+	vFrameCodeRoutine = configure->oFrame;
+	vVSyncCodeRoutine = configure->oVSync;
+	vDMAEcCodeRoutine = configure->oDMAEc;
+
+	if (vHSyncCodeRoutine != NULL) { DCMI->IER |= DCMI_IER_LINE_IE;  }
+	if (vFrameCodeRoutine != NULL) { DCMI->IER |= DCMI_IER_FRAME_IE; }
+	if (vVSyncCodeRoutine != NULL) { DCMI->IER |= DCMI_IER_VSYNC_IE; }
+	return (status);
+}
+
+/*
+ * \brief _writeS2
+ *
+ */
+static	bool_t	_writeS2(const S2Order_t *order) {
+
+	cb_control(KRESERVE);
+	kern_suspendProcess(1);
+
+// Phase 1: Waiting for ready
+
+	if (!_waitingForReady()) { cb_control(KRELEASE); return (FALSE); }
+
+// Phase 2: Write a complete order sequence
+
+	cb_control(KSELECT);
+	cb_writeReadSPI(order->oSPICmd2);
+	cb_writeReadSPI((uint8_t)(order->oRegister>>16));
+	cb_writeReadSPI((uint8_t)(order->oRegister>>8));
+	cb_writeReadSPI((uint8_t)(order->oRegister>>0));
+
+// The parameters (1, 2 or 4-bytes)
+
+	switch (order->oNbParam) {
+		case 1: {
+			cb_writeReadSPI((uint8_t)( order->oParam      & 0x000000FF));
+			break;
+		}
+		case 2: {
+			cb_writeReadSPI((uint8_t)((order->oParam>>8)  & 0x000000FF));
+			cb_writeReadSPI((uint8_t)( order->oParam      & 0x000000FF));
+			break;
+		}
+		case 4: {
+			cb_writeReadSPI((uint8_t)((order->oParam>>24) & 0x000000FF));
+			cb_writeReadSPI((uint8_t)((order->oParam>>16) & 0x000000FF));
+			cb_writeReadSPI((uint8_t)((order->oParam>>8)  & 0x000000FF));
+			cb_writeReadSPI((uint8_t)( order->oParam      & 0x000000FF));
+			break;
+		}
+		default: {
+			break;
+		}
+	}
+	cb_control(KDESELECT);
+	cb_control(KRELEASE);
+	return (TRUE);
+}
+
+/*
+ * \brief _readS2
+ *
+ */
+static	bool_t	_readS2(S2Order_t *order) {
+	uint32_t		i;
+
+	cb_control(KRESERVE);
+	kern_suspendProcess(1);
+
+// Phase 1: Waiting for ready
+
+	if (!_waitingForReady()) { cb_control(KRELEASE); return (FALSE); }
+
+// Phase 2: Write a complete order sequence
+
+	cb_control(KSELECT);
+	cb_writeReadSPI(order->oSPICmd2);
+	cb_writeReadSPI((uint8_t)(order->oRegister>>16));
+	cb_writeReadSPI((uint8_t)(order->oRegister>>8));
+	cb_writeReadSPI((uint8_t)(order->oRegister>>0));
+	cb_control(KDESELECT);
+
+// Phase 3: Waiting for ready
+
+	if (!_waitingForReady()) { cb_control(KRELEASE); return (FALSE); }
+
+	kern_suspendProcess(1);
+
+// Phase 4: Read the n bytes
+// Take in account the possible dummy read
+
+	cb_control(KSELECT);
+	cb_writeReadSPI(order->oSPICmd4);
+
+	if (order->oRdDummy) cb_writeReadSPI(0x00);
+
+	order->oParam = 0;
+	for (i = 0; i < order->oNbParam; i++) {
+		order->oParam = order->oParam<<8;
+		order->oParam = order->oParam | (uint32_t)cb_writeReadSPI(0x00);
+	}
+
+	cb_control(KDESELECT);
+	cb_control(KRELEASE);
+	return (TRUE);
+}
+
+/*
+ * \brief _waitingForReady
+ *
+ */
+static	bool_t	_waitingForReady(void) {
+	uint64_t	time[2];
+	uint8_t		status;
+
+// Waiting for the ready (under timeout)
+
+	kern_getTiccount(&time[0]);
+
+	while (TRUE) {
+		cb_control(KSELECT);
+		status = cb_writeReadSPI(SPI_CMD_GET_S2_SPI_STATUS);
+		cb_control(KDESELECT);
+		if ((status & 0xF0) == 0x00) {
+			break;
+		}
+		kern_switchFast();
+		kern_getTiccount(&time[1]);
+		if ((time[1] - time[0]) >= 1000000) {
+			return (FALSE);
+		}
+	}
+	return (TRUE);
+}
+
+/*
+ * \brief aDCMI_IRQHandler
+ *
+ * - HSYNC interruption
+ * - VSYNC interruption
+ *
+ */
+static	void	aDCMI_IRQHandler(void) {
+	void	(*go)(void);
+
+// HSYNC - Horizontal callback
+
+	if ((DCMI->RISR & DCMI_RISR_LINE_RIS) != 0) {										
+		DCMI->ICR = DCMI_ICR_LINE_ISC;
+		if (vHSyncCodeRoutine != NULL) {											
+			go = vHSyncCodeRoutine;
+			go();
+		}
+	}
+
+// Frame - Frame callback
+
+	if ((DCMI->RISR & DCMI_RISR_FRAME_RIS) != 0) {
+		DCMI->ICR = DCMI_ICR_FRAME_ISC;
+		if (vFrameCodeRoutine != NULL) {
+			go = vFrameCodeRoutine;
+			go();
+		}
+	}
+
+// VSYNC - Vertical callback
+
+	if ((DCMI->RISR & DCMI_RISR_VSYNC_RIS) != 0) {										
+		DCMI->ICR = DCMI_ICR_VSYNC_ISC;
+		if (vVSyncCodeRoutine != NULL) {											
+			go = vVSyncCodeRoutine;
+			go();
+
+			#if (defined(__WITHSEMA__) && defined(__IMAGERS2_SEMA_VS__))			
+			if (vVSSema) { kern_signalSemaphore(vSeHandleVS[0]); }
+			#endif																
+		}
+	}
+
+	PREEMPTION;
+}
+
+/*
+ * \brief aDMA2_Stream1_IRQHandler
+ *
+ * - DMA interruption
+ *
+ */
+static	void	aDMA2_Stream1_IRQHandler(void) {
+	void	(*go)(void);
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF1;
+
+	switch (vAcqPage) {
+		case KINTERNAL: {
+			if (vDMAEcCodeRoutine != NULL) {
+				go = vDMAEcCodeRoutine;
+				go();
+			}
+
+			#if (defined(__WITHSEMA__) && defined(__IMAGERS2_SEMA_IM__))
+			if (vIMSema) { kern_signalSemaphore(vSeHandleIM[0]); }
+			#endif
+			
+			break;
+		}
+		default:
+		case KEXTERNAL: {
+			DMA2_Stream1->CR |= DMA_SxCR_EN;
+			DMA2_Stream0->CR |= DMA_SxCR_EN;
+			break;
+		}
+	}
+
+	PREEMPTION;
+}
+
+/*
+ * \brief aDMA2_Stream0_IRQHandler
+ *
+ * - DMA interruption
+ *
+ */
+static	void	aDMA2_Stream0_IRQHandler(void) {
+			void		(*go)(void);
+	static	uint16_t	row = 0;
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF0;
+
+	if (vPage == 0) { DMA2_Stream0->M0AR = (uint32_t)vImageE1+(vNbCols*vSize*++row); }
+	else            { DMA2_Stream0->M0AR = (uint32_t)vImageE0+(vNbCols*vSize*++row); }
+
+	if (row >= vNbRows) {															
+		row = 0;
+		if (vPage == 0) { DMA2_Stream0->M0AR = (uint32_t)vImageE0; vPage = 1; }
+		else            { DMA2_Stream0->M0AR = (uint32_t)vImageE1; vPage = 0; }
+		if (vDMAEcCodeRoutine != NULL) {											
+			go = vDMAEcCodeRoutine;
+			go();
+		}																		
+
+		#if (defined(__WITHSEMA__) && defined(__IMAGERS2_SEMA_IM__))				
+		if (vIMSema) { kern_signalSemaphore(vSeHandleIM[0]); }
+		#endif																	
+
+	}
+
+	PREEMPTION;
+}
+

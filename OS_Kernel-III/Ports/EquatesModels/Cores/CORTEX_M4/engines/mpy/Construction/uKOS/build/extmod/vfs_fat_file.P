@@ -1,0 +1,40 @@
+build/py/../extmod/vfs_fat_file.o: ../py/../extmod/vfs_fat_file.c \
+ ../py/mpconfig.h mpconfigport.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdint.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/stdint.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_default_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/features.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_newlib_version.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_intsup.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_stdint.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/alloca.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/newlib.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/config.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/ieeefp.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/reent.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stddef.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/lock.h
+../py/../extmod/vfs_fat_file.c :
+ ../py/mpconfig.h mpconfigport.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdint.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/stdint.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_default_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/features.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_newlib_version.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_intsup.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_stdint.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/alloca.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/newlib.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/config.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/ieeefp.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/reent.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stddef.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/lock.h :

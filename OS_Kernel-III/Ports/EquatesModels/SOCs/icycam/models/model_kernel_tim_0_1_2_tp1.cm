@@ -1,0 +1,505 @@
+/*
+; model_kernel_tim_0_1_2_tp1.
+; ===========================
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 185                  $:  Revision of last commit
+; $Date:: 2017-08-17 15:20:55#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "model_kernel_tim_0_1_2_tp1" device.
+;
+;			Tim 0	- 1-ms reference time
+;			Tim 1	- 20-ms	process timeout
+;			Tim 2	- 1-us free running timer
+;			tp1		- software interruption for message passing
+;
+;			This code has to support the following routines:
+;			- kernel_init
+;			- kernel_runKernel
+;			- kernel_loadOverlay
+;			- kernel_setLowPower
+;			- kernel_runPrecise
+;			- kernel_initStackFrame
+;			- kernel_setUnixTime
+;			- kernel_getUnixTime
+;			- kernel_timeStmp
+;			- kernel_timeNext
+;			- kernel_interruptionFast
+;			- kernel_switcher
+;			- kernel_message
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+#include 	<uKOS.h>
+
+#define	KDIV32		5													// 33-MHz ~= 2^^5
+#define KTTIMT0		((KTIMEUNIT*KFREQUENCY_33/1000)+1)					// For 1-mS
+#define KTTIMT1		((KTIMEPROC*KFREQUENCY_33/1000)+1)					// For 20-mS
+#define KTTIMT2		(-1)												// Free running timer for statistic
+
+extern	volatile	proc_t		*vKern_backwardProcess;					// Ptr on the backward process
+static	volatile	uint16_t	vTimeStart     = 0;						// Time-stamp: when the process was scheduled
+static	volatile	uint16_t	vTimeStop      = 0;						// Time-stamp: when the process was stopped
+static	volatile	uint16_t	vTimeLastStart = 0;						// Time-stamp: when the process was started (previous cycle)
+static				uint64_t	vTiccount      = 0;						// 64-bit timer (1-us)
+static				uint32_t	vUnixTime;								// Absolute UNIX time
+		volatile	uint16_t	vTimeException = 0;						// Sum of time spent inside all the exceptions
+		volatile	uint32_t	vKern_stackProcess;						// Process stack (entry point by Trap)
+		volatile	uint32_t	vKern_message;							// Trap message	used by the uKernel
+
+// Prototypes
+// ==========
+
+extern	void	handle_kernel_switcher(void);
+extern	void	handle_kernel_message(void);
+extern	void	handle_kernel_interruptionFast(void);
+extern	void	sche_callBackTrap(uint32_t message);
+extern	void	sche_callBackFast(void);
+extern	void	sche_callBackSlow(void);
+extern	void	stat_statistic(volatile proc_t *backwardProcess, uint16_t timeStart, uint16_t timeStop, uint16_t timeLastStart, uint16_t timeE);
+static	void	_timeStart(void);
+static	void	_timeStop(void);
+static	void	_timeStmp(void);
+static	void	_loadTimer(uint16_t *timer);
+
+/*
+ * \brief kernel_init
+ *
+ * - Initialize the UNIX time 1-1-1970 0h 0m 0s
+ * - Initialize the interruption vectors
+ *
+ */
+void	kernel_init(void) {
+
+	EXCEPTION_VECTOR(KTRAP1EXEPTION, handle_kernel_message);
+
+	vUnixTime = 0;
+}
+
+/*
+ * \brief kernel_runKernel
+ *
+ * - Initialize all the timers (1-ms & 20-ms and time-stamp)
+ * - Enable the time sharing and all the uKernel interruptions
+ *
+ */
+void	kernel_runKernel(void) {
+
+// Timer 0 (1-ms)
+
+  	*TIMER0_PWM_LO = KTTIMT0;
+  	*TIMER0_IRQEN  = (1<<BBOUND_REACHED);
+
+// Timer 1 (20-ms)
+
+  	*TIMER1_PWM_LO = KTTIMT1;
+  	*TIMER1_IRQEN  = (1<<BBOUND_REACHED);
+
+// Timer 2 (free running timer for statistics)
+
+	*TIMER2_PWM_LO = KTTIMT2;
+
+// Interrupt controller
+
+	*RQCTRL_IRQ_VEC_5 = (uint32_t)(handle_kernel_interruptionFast);
+  	*RQCTRL_IRQ_VEC_6 = (uint32_t)(handle_kernel_switcher);
+  	*RQCTRL_SOURCE_EN_W1S = (1<<BTIMER1) | (1<<BTIMER0);
+	*RQCTRL_IRQ_CONFIG_0 |= (KINT_LEVEL_TIMERS<<BPRIREQ06) | (KINT_LEVEL_TIMERS<<BPRIREQ05);
+	*RQCTRL_IRQ_LEVEL_EN  = KINT_SYS_LEVEL;
+
+// Enable the timers
+
+	*TIMER0_CTRL = CPT_INTERNAL | (1<<BTIMER_IRQ_EN) | (1<<BTIMER_EN);
+	*TIMER1_CTRL = CPT_INTERNAL | (1<<BTIMER_IRQ_EN) | (1<<BTIMER_EN);
+	*TIMER2_CTRL = CPT_INTERNAL |                      (1<<BTIMER_EN);
+}
+
+#if (defined(__WITHOVLY__))
+/*
+ * \brief kernel_loadOverlay
+ *
+ * - Load an overlay process inside the overlay RAM
+ *
+ */
+void	kernel_loadOverlay(uint32_t idModule) {
+
+}
+#endif
+
+/*
+ * \brief kernel_setLowPower
+ *
+ * - Set the low power mode
+ *
+ */
+void	kernel_setLowPower(uint8_t mode) {
+
+	switch (mode) {
+		case KCPUPNORMAL:
+		case KCPUPDEEP:
+		case KCPUPHIBERNATE:
+		case KCPUPSTOP:
+		default: {
+
+// Waiting for an interruption
+
+			WAITING_INTERRUPTION;
+			break;
+		}
+	}
+}
+
+/*
+ * \brief kernel_runPrecise
+ *
+ * - Initialize the runPrecise function
+ *
+ */
+void	kernel_runPrecise(uint16_t time, void (*code)(void)) {
+
+}
+
+/*
+ * \brief kernel_initStackFrame
+ *
+ * - Initialize and prepare the stack frame for a process
+ *
+ */
+void	kernel_initStackFrame(volatile proc_t *handle, const void *argument) {
+	uint32_t	address, addressMsb, addressLsb;
+	uint32_t	*stackFrame, i;
+
+//  Return address format inside the hardware stack
+//
+//  --                              16 15    9   8              4   3 2   10
+//  -- Word is: x..x | Return Address | xxxxxx | Exception Status | pcm | 00 (jsr)
+//  --          x..x | Return Address | xxxxxx | Exception Status | pcm | 01 (exception)
+//  --          lend | lbeg           |        | lrit             | pcm | 10 (loop)
+//  --          lend | lbeg           |        | lrit             | pcm | 11 (repeat)
+//											   |				  |		|
+//                                             | 1   1001         | 00  | 01
+//  MSB word: Bits 07..00		Address MSB
+//  LSB word: Bits 31..16		Address LSB
+//  LSB word: Bits 15..09		-
+//  LSB word: Bits 08..04		0x19 (No Exceptions)
+//  LSB word: Bits 01..00		0x01 (Exceptions)
+
+	address = (uint32_t)handle->oSpecification.oCode;
+	address = address>>2;
+	addressMsb = (address>>16) & 0x000000FF;
+	addressLsb = (address<<16) & 0xFFFF0000;
+	addressLsb = addressLsb | 0x0191;
+
+// Fill the stack with a "magic" pattern (for statistic)
+
+	stackFrame = handle->oSpecification.oStkSup;
+	for (i = 0; i < handle->oSpecification.oSzStk; i++) {
+		*--stackFrame = (('u'<<24) | ('K'<<16) | ('O'<<8) | 'S');
+	}
+
+// Prepare the stack frame
+
+	stackFrame = handle->oSpecification.oStkSup;				//
+	*--stackFrame = 0;											// r7
+	*--stackFrame = 0;											// r6
+	*--stackFrame = 0;											// r5
+	*--stackFrame = 0;											// r4
+	*--stackFrame = 0;											// r3
+	*--stackFrame = 0;											// r2
+	*--stackFrame = 0;											// r1
+	*--stackFrame = 0;											// r0
+	*--stackFrame = 0;											// px6
+	*--stackFrame = 0;											// px5
+	*--stackFrame = 0;											// px4
+	*--stackFrame = 0;											// px3
+	*--stackFrame = 0;											// px2
+	*--stackFrame = 0;											// px1
+	*--stackFrame = (uint32_t)argument;							// px0
+
+	*--stackFrame = 0x00000000;									// psu1 L (PB PA)
+	*--stackFrame = 0x00000000;									// psu1 H (DM PF)
+	*--stackFrame = 0x00002000;									// psu0 L (HD EC)
+	*--stackFrame = 0x00008000;									// psu0 H (EX IN)
+
+	*--stackFrame = KINT_IMASK_ALL;								// iel
+	*--stackFrame = 0;											// sbr
+
+	*--stackFrame = addressLsb;									// address LSB
+	*--stackFrame = addressMsb;									// address MSB
+	*--stackFrame = 1;											// scnt
+
+	handle->oSpecification.oStkSup = stackFrame;
+}
+
+/*
+ * \brief kernel_setUnixTime
+ *
+ * - Set the UNIX absolute time
+ *
+ */
+void	kernel_setUnixTime(uint32_t unixTime) {
+
+	vUnixTime = unixTime;
+}
+
+/*
+ * \brief kernel_getUnixTime
+ *
+ * - Get the UNIX absolute time
+ *
+ */
+void	kernel_getUnixTime(uint32_t *unixTime) {
+
+	 *unixTime = vUnixTime;
+}
+
+/*
+ * \brief kernel_timeStmp
+ *
+ * - Give a new 64-bit time-stamp (1-us of resolution)
+ *   - 0x0000000000000000 to 0xFFFFFFFFFFFFFFFF incremental counter
+ *
+ */
+void	kernel_timeStmp(uint64_t *timeStmp) {
+
+	_timeStmp();
+	*timeStmp = vTiccount;
+}
+
+/*
+ * \brief kernel_timeNext
+ *
+ * - Give a new time for a process
+ *
+ */
+void	kernel_timeNext(void) {
+
+  	*TIMER1_PWM_LO = KTTIMT1;
+	*TIMER1_CTRL   = CPT_INTERNAL | (1<<BTIMER_IRQ_EN) | (1<<BTIMER_EN);
+}
+
+/*
+ * \brief kernel_getPC
+ *
+ * - Get a value of the PC
+ *
+ */
+void	kernel_getPC(const uint32_t *stackProcess, uint32_t *pc) {
+
+	*pc = 0;
+}
+
+/*
+ * \brief kernel_getFunctionName
+ *
+ * - Get the function name prepended by the gcc compiler
+ *   (extraction using the option "-mpoke-function-name"
+ *
+ */
+void	kernel_getFunctionName(const uint32_t pc, const char_t **function) {
+
+	*function = NULL;
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief kernel_interruptionFast
+ *
+ * - Fine time interruption
+ * - Increment the ticcount of 1-us resolution
+ * - Verify the timeout condition of the suspended processes
+ *
+ */
+void	kernel_interruptionFast(void) {
+	static	uint32_t	counter = 0;
+
+	TIC_EXCEPTION_TIME;
+
+// INT acknowledge
+// Tic_count++ and verify the timeout conditions
+// Increment the UNIX time seconds
+
+	*TIMER0_STATUS = (1<<BBOUND_REACHED);
+
+	sche_callBackFast();
+	if (counter++ % (1000/KTIMEUNIT) == 0) {
+		vUnixTime++;
+	}
+	_timeStmp();
+	TAC_EXCEPTION_TIME;
+}
+
+/*
+ * \brief kernel_switcher
+ *
+ * - Time slice timeout
+ * - Save the context
+ * - Save the context stack
+ * - Change the context
+ * - Give another timeout to the process
+ * - Recover another context
+ *
+ */
+void	kernel_switcher(void) {
+
+// INT acknowledge and new time for the next process
+// Change the context and prepare the next process
+// - Stop time of the process
+// - Clear the interruption
+// - Disable the timer
+// - Change the context
+// - Start time of the process
+
+	_timeStop();
+	*TIMER1_STATUS = (1<<BBOUND_REACHED);
+	*TIMER1_CTRL   = 0;
+
+	sche_callBackSlow();
+	_timeStart();
+
+	#if (defined(__WITHSTAT__))
+	stat_statistic(vKern_backwardProcess, vTimeStart, vTimeStop, vTimeLastStart, vTimeException);
+	vTimeException = 0;
+	#endif
+}
+
+/*
+ * \brief kernel_message
+ *
+ * - TRAP
+ * - Save the context
+ * - Save the context stack
+ * - Process the message sent
+ * - Change the context
+ * - Give another timeout to the process
+ * - Recover another context
+ *
+ */
+void	kernel_message(void) {
+
+// INT acknowledge and new time for the next process
+// Change the context and prepare the next process
+// - Stop time of the process
+// - Clear the interruption
+// - Disable the timer
+// - Change the context
+// - Start time of the process
+
+	_timeStop();
+	*TIMER1_STATUS = (1<<BBOUND_REACHED);
+	*TIMER1_CTRL   = 0;
+
+	sche_callBackTrap(vKern_message);
+	_timeStart();
+
+	#if (defined(__WITHSTAT__))
+	stat_statistic(vKern_backwardProcess, vTimeStart, vTimeStop, vTimeLastStart, vTimeException);
+	vTimeException = 0;
+	#endif
+}
+
+/*
+ * \brief _loadTimer
+ *
+ * - The timer is clocked at 33-MHz
+ *   So, the timer has to be divided by 33!
+ *   value/33 ~= value/32 - value/1024 - value/33792 - ..
+ *
+ * - Approximated at
+ *   value/33 ~= value/32 - value/1024
+ *
+ */
+static	void	_loadTimer(uint16_t *timer) {
+	uint32_t	counter, p32, p1024;
+
+	counter = -(*TIMER2_COUNTER);
+	p32     = (counter>>KDIV32);
+	p1024   = (p32>>KDIV32);
+	*timer  = (uint16_t)(p32 - p1024);
+}
+
+/*
+ * \brief _timeStart
+ *
+ * - Give a new time-stamp (1-us of resolution)
+ *   - 0x0000 to 0xFFFF incremental counter
+ *
+ */
+#pragma	GCC diagnostic	push
+#pragma	GCC diagnostic	ignored	"-Wcast-qual"
+static	void	_timeStart(void) {
+
+	INTERRUPTION_OFF;
+	vTimeLastStart = vTimeStart;
+	_loadTimer((uint16_t *)&vTimeStart);
+	INTERRUPTION_RESTORED;
+}
+#pragma	GCC	diagnostic	pop
+
+/*
+ * \brief _timeStop
+ *
+ * - Give a new time-stamp (1-us of resolution)
+ *   - 0x0000 to 0xFFFF incremental counter
+ *
+ */
+#pragma	GCC diagnostic	push
+#pragma	GCC diagnostic	ignored	"-Wcast-qual"
+static	void	_timeStop(void) {
+
+	_loadTimer((uint16_t *)&vTimeStop);
+}
+#pragma	GCC	diagnostic	pop
+
+/*
+ * \brief _timeStmp
+ *
+ * - Maintain a 64-bit timer with 1-us of resolution
+ *
+ */
+static	void	_timeStmp(void) {
+			uint16_t	newTime;
+	static	uint16_t	oldTime = 0;
+
+	INTERRUPTION_OFF;
+	_loadTimer(&newTime);
+	if (newTime < oldTime) {
+		vTiccount += 0x10000;
+	}
+
+	vTiccount = (vTiccount & 0xFFFFFFFFFFFF0000) | newTime;
+	oldTime = newTime;	
+	INTERRUPTION_RESTORED;
+}
+

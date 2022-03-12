@@ -1,0 +1,180 @@
+
+//------------------------------------------------------------------------
+// Author:	Franzi Edo.	The 2001-02-25
+// Modifs: 
+//
+// SVN:
+// $Author:: efr               $:  Author of last commit
+// $Rev:: 113                  $:  Revision of last commit
+// $Date:: 2017-04-16 16:55:48#$:  Date of last commit		
+//
+// Project:	uKOS
+// Goal:	Create a test database
+//			2 classe multidimensional non linear separator
+//
+//   (c) 1992-2017, Franzi Edo.
+//   --------------------------
+//                                              __ ______  _____
+//   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+//   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+//   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+//                                     \__,_/_/ |_\____//____/
+//   edo.franzi@ukos.ch
+//
+//   This program is free software: you can redistribute it and/or modify
+//   it under the terms of the GNU Affero General Public License as published by
+//   the Free Software Foundation, either version 3 of the License, or
+//   (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+//   GNU Affero General Public License for more details.
+//
+//   You should have received a copy of the GNU Affero General Public License
+//   along with this program. If not, see <http://www.gnu.org/licenses/>.
+//
+//------------------------------------------------------------------------
+
+KNBCLASSES_P			= 3;						// Number of classes (positive)		
+KNBCLASSES_N			= 1;						// Number of classes (negative)		
+KNBSAMPLES_P			= 600;						// Number of samples (positive)	
+KNBSAMPLES_N			= 200;						// Number of samples (negative)	
+KNBSAMPLESPERCLASSE_P	= KNBSAMPLES_P/KNBCLASSES_P	// Number of samples per classes (positive)
+KNBSAMPLESPERCLASSE_N	= KNBSAMPLES_N/KNBCLASSES_N	// Number of samples per classes (negative)
+KABSMAXFUNCTION			= 100;						// Max value of the function (abs)
+KABSMAXOUTPUT			= 0.98;						// Max value of the neuron output (abs)
+KGOOD					= KABSMAXOUTPUT;			// Good classe
+KBAD					= -KABSMAXOUTPUT;			// Bad classe
+
+// Get the fp for the database file
+
+path = getfile('Training and Verifying Data Dases:');
+(dir, filename, ext) = fileparts(path);
+fd_L = fopen([dir, 'DB_L_file', '.txt'], 'wt');
+fd_V = fopen([dir, 'DB_V_file', '.txt'], 'wt');
+
+// Generate the Learning database
+// ------------------------------
+
+nbClass1 = 0; nbClass2 = 0; nbClass3 = 0; nbClass4 = 0;
+
+// Data for the class 1
+
+while (nbClass1 < KNBSAMPLESPERCLASSE_P)
+	coordinate = (rand(1, 3) - 0.5) * 2 * KABSMAXFUNCTION;
+	x = coordinate(:, 1); y = coordinate(:, 2); z = coordinate(:, 3);
+
+	if ((x-80)^2 + (y-80)^2 + (z-80)^2 - 100 <= 0)
+		plot3(x, y, z, 'ro')
+		fprintf(fd_L, '%f\t %f\t %f\t %f\t %f\t %f\n', x/KABSMAXFUNCTION, y/KABSMAXFUNCTION, z/KABSMAXFUNCTION, KGOOD, KBAD, KBAD);
+		nbClass1 = nbClass1 + 1
+	end
+end
+
+// Data for the class 2
+
+while (nbClass2 < KNBSAMPLESPERCLASSE_P)
+	coordinate = (rand(1, 3) - 0.5) * 2 * KABSMAXFUNCTION;
+	x = coordinate(:, 1); y = coordinate(:, 2); z = coordinate(:, 3);
+
+	if ((x+80)^2 + (y+80)^2 + (z+80)^2 - 600 <= 0)
+		plot3(x, y, z, 'go')
+		fprintf(fd_L, '%f\t %f\t %f\t %f\t %f\t %f\n', x/KABSMAXFUNCTION, y/KABSMAXFUNCTION, z/KABSMAXFUNCTION, KBAD, KGOOD, KBAD);
+		nbClass2 = nbClass2 + 1
+	end
+end
+
+// Data for the class 3
+
+while (nbClass3 < KNBSAMPLESPERCLASSE_P)
+	coordinate = (rand(1, 3) - 0.5) * 2 * KABSMAXFUNCTION;
+	x = coordinate(:, 1); y = coordinate(:, 2); z = coordinate(:, 3);
+
+	if ((x)^2 + (y)^2 + (z)^2 - 400 <= 0)
+		plot3(x, y, z, 'bo')
+		fprintf(fd_L, '%f\t %f\t %f\t %f\t %f\t %f\n', x/KABSMAXFUNCTION, y/KABSMAXFUNCTION, z/KABSMAXFUNCTION, KBAD, KBAD, KGOOD);
+		nbClass3 = nbClass3 + 1
+	end
+end
+
+// Data for the class 4
+
+while (nbClass4 < KNBSAMPLESPERCLASSE_N)
+	coordinate = (rand(1, 3) - 0.5) * 2 * KABSMAXFUNCTION;
+	x = coordinate(:, 1); y = coordinate(:, 2); z = coordinate(:, 3);
+	
+	if ((x-80)^2 + (y-80)^2 + (z-80)^2 - 100 > 0)
+		if ((x+80)^2 + (y+80)^2 + (z+80)^2 - 600 > 0)
+			if ((x)^2 + (y)^2 + (z)^2 - 400 > 0)
+				plot3(x, y, z, 'co')
+				fprintf(fd_L, '%f\t %f\t %f\t %f\t %f\t %f\n', x/KABSMAXFUNCTION, y/KABSMAXFUNCTION, z/KABSMAXFUNCTION, KBAD, KBAD, KBAD);
+				nbClass4 = nbClass4 + 1
+			end
+		end
+	end
+end
+
+// Generate the Verifying database
+// -------------------------------
+
+nbClass1 = 0; nbClass2 = 0; nbClass3 = 0; nbClass4 = 0;
+
+// Data for the class 1
+
+while (nbClass1 < KNBSAMPLESPERCLASSE_P)
+	coordinate = (rand(1, 3) - 0.5) * 2 * KABSMAXFUNCTION;
+	x = coordinate(:, 1); y = coordinate(:, 2); z = coordinate(:, 3);
+
+	if ((x-80)^2 + (y-80)^2 + (z-80)^2 - 100 <= 0)
+		plot3(x, y, z, 'r+')
+		fprintf(fd_V, '%f\t %f\t %f\t %f\t %f\t %f\n', x/KABSMAXFUNCTION, y/KABSMAXFUNCTION, z/KABSMAXFUNCTION, KGOOD, KBAD, KBAD);
+		nbClass1 = nbClass1 + 1
+	end
+end
+
+// Data for the class 2
+
+while (nbClass2 < KNBSAMPLESPERCLASSE_P)
+	coordinate = (rand(1, 3) - 0.5) * 2 * KABSMAXFUNCTION;
+	x = coordinate(:, 1); y = coordinate(:, 2); z = coordinate(:, 3);
+		
+	if ((x+80)^2 + (y+80)^2 + (z+80)^2 - 600 <= 0)
+		plot3(x, y, z, 'g+')
+		fprintf(fd_V, '%f\t %f\t %f\t %f\t %f\t %f\n', x/KABSMAXFUNCTION, y/KABSMAXFUNCTION, z/KABSMAXFUNCTION, KBAD, KGOOD, KBAD);
+		nbClass2 = nbClass2 + 1
+	end
+end
+
+// Data for the class 3
+
+while (nbClass3 < KNBSAMPLESPERCLASSE_P)
+	coordinate = (rand(1, 3) - 0.5) * 2 * KABSMAXFUNCTION;
+	x = coordinate(:, 1); y = coordinate(:, 2); z = coordinate(:, 3);
+		
+	if ((x)^2 + (y)^2 + (z)^2 - 400 <= 0)
+		plot3(x, y, z, 'b+')
+		fprintf(fd_V, '%f\t %f\t %f\t %f\t %f\t %f\n', x/KABSMAXFUNCTION, y/KABSMAXFUNCTION, z/KABSMAXFUNCTION, KBAD, KBAD, KGOOD);
+		nbClass3 = nbClass3 + 1
+	end
+end
+
+// Data for the class 4
+
+while (nbClass4 < KNBSAMPLESPERCLASSE_N)
+	coordinate = (rand(1, 3) - 0.5) * 2 * KABSMAXFUNCTION;
+	x = coordinate(:, 1); y = coordinate(:, 2); z = coordinate(:, 3);
+
+	if ((x-80)^2 + (y-80)^2 + (z-80)^2 - 100 > 0)
+		if ((x+80)^2 + (y+80)^2 + (z+80)^2 - 600 > 0)
+			if ((x)^2 + (y)^2 + (z)^2 - 400 > 0)
+				plot3(x, y, z, 'c+')
+				fprintf(fd_V, '%f\t %f\t %f\t %f\t %f\t %f\n', x/KABSMAXFUNCTION, y/KABSMAXFUNCTION, z/KABSMAXFUNCTION, KBAD, KBAD, KBAD);
+				nbClass4 = nbClass4 + 1
+			end
+		end
+	end
+end
+
+fclose(fd_L);
+fclose(fd_V);

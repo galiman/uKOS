@@ -1,0 +1,242 @@
+
+//------------------------------------------------------------------------
+// Author:	Franzi Edo.	The 2015-04-20
+// Modifs: 
+//
+// SVN:
+// $Author:: efr               $:  Author of last commit
+// $Rev:: 161                  $:  Revision of last commit
+// $Date:: 2017-06-15 15:01:25#$:  Date of last commit		
+//
+// Project:	uKOS
+// Goal:	Display the angle computed with a Kalman filter.
+//			This viewer is an adaptation of the one provided by
+//			Calerga Sarl, www.calerga.com.
+//			Thanks to Calerga Sarl for their advices.
+//
+//   (c) 1992-2017, Franzi Edo.
+//   --------------------------
+//                                              __ ______  _____
+//   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+//   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+//   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+//                                     \__,_/_/ |_\____//____/
+//   edo.franzi@ukos.ch
+//
+//   This program is free software: you can redistribute it and/or modify
+//   it under the terms of the GNU Affero General Public License as published by
+//   the Free Software Foundation, either version 3 of the License, or
+//   (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+//   GNU Affero General Public License for more details.
+//
+//   You should have received a copy of the GNU Affero General Public License
+//   along with this program. If not, see <http://www.gnu.org/licenses/>.
+//
+//------------------------------------------------------------------------
+
+title "viewer"
+
+version
+{@
+Version 1.0, 18 August 2015
+
+Copyright 2017, uKOS www.ukos.ch
+@}
+
+help
+{@
+This SQ file allows to display the angle computed with a Kalman filter.
+
+1. Launch this Sysquake program
+
+2. In a terminal type: dump DBYLFG1D
+   !!! 30seconds of timeout
+
+3. From the uKOS serial terminal type:
+   sloader (and download the xyz.s3)
+
+@}
+
+variable	data, index, thr
+
+init		(thr) = init()
+idle		(data, index, _idlerate) = idle()
+terminate	terminate(thr)
+
+figure "Acce Angle"
+	draw drawAcceAngle(index, data)
+
+figure "Bias"
+	draw drawBias(index, data)
+
+figure "Angle"
+	draw drawAngle(index, data)
+
+functions
+{@
+
+define	KPIPE			= false						// true = PIPE, false = FILE
+define	KNBNUMBER		= 4							// 4 digits
+define	KSZNUMBER		= 15						// -123456789.11_
+define	KSZBUFFER		= KNBNUMBER*KSZNUMBER		// Size of the buffer before to read it
+define	KVTIM			= 1							// Position number for the Time
+define	KACCE			= 2							// Position number for the Acce
+define	KBIAS			= 3							// Position number for the Bias
+define	KANGLE			= 4							// Position number for the Angle
+
+define	KNBSAMPLES		= 200						// Number of samples for the horizontal scrol
+define	KANGLEMAX		= 180						// Max boundary for Acce / Angle
+define	KANGLEMIN		= -KANGLEMAX				// Min boundary for Acce / Angle
+define	KBIASMAX		= 2000						// Max boundary for Bias
+define	KBIASMIN		= -KBIASMAX					// Max boundary for Bias
+
+// Thread acquisition
+// ------------------
+
+function acquisition()
+	global exit dataNew indexNew semaNew semaUsed
+
+	fd = -1;
+	if (KPIPE)
+		unix('mkfifo tmp/pipe');
+	end;
+	while (fd < 0)
+		fd = fopen('tmp/pipe');
+	end;
+
+// Try to read blocs of data containing a complete line
+// KSZBUFFER should be adapted to contain a complete line
+
+	indexNew = 0;
+	vect = zeros(1, KNBNUMBER);
+	while (~exit)
+		while (fionread(fd) > KSZBUFFER)
+			line = fgetl(fd);
+			vect = sscanf(line, '%f')';
+		end;
+
+// Keep only the last KNBSAMPLES
+// If there is not a new line, then, use the last one
+
+		indexNew = indexNew + 1;
+		dataNew = [dataNew; vect];
+		szData = size(dataNew, 1);
+		if szData > KNBSAMPLES
+			dataNew = dataNew(2:szData, :);
+		end
+
+// Signal imgNew is ready
+// Wait until imgNew is used
+
+		semaphoreunlock(semaNew);
+		semaphorelock(semaUsed);
+	end;
+
+// Delete the 2 semaphores
+// Close the file
+
+	semaphoredelete(semaNew);
+	semaphoredelete(semaUsed);
+	fclose(fdImage);
+
+// Initialisations
+// ---------------
+
+function (thr) = init()
+	global exit dataNew indexNew semaNew semaUsed
+
+	unix('rm -rf tmp/pipe');
+	subplots(['Acce Angle\nBias\nAngle']);
+
+	indexNew = 0;
+	dataNew  = [];
+	exit     = false;
+	semaNew  = semaphorenew;
+	semaUsed = semaphorenew;
+
+// No imgNew until unlocked by thread
+// The thread will be blocked until the image is used
+
+	semaphorelock(semaNew);
+	semaphorelock(semaUsed);
+	thr = threadnew(@acquisition, StackSize=10e4);
+
+// Terminate
+// ---------
+
+function terminate(thr)
+
+// Kill the thread acquisition
+
+	threadkill(thr);
+
+// Compute ...
+// ===========
+
+// idle loop
+// ---------
+
+function (data, index, idlerate) = idle()
+	global dataNew indexNew semaNew semaUsed
+
+	idlerate = 0.000001;
+
+// Give up until imgNew is ready
+// Use the imgNew to create the img for the display
+// Signal imNew is used
+
+	if (semaphorelock(semaNew))
+		data  = dataNew;
+		index = indexNew;
+		semaphoreunlock(semaUsed);
+	else
+
+// Prevent a useless redraw
+
+		cancel(false);
+	end;
+
+// draw acceleration angle, bias & angle computed by Kalman
+// --------------------------------------------------------
+
+function drawAcceAngle(index, data);
+	i = 1; ix = index;
+	if index > 0
+		if index > KNBSAMPLES
+			i = index - KNBSAMPLES + 1;
+			ix = KNBSAMPLES;
+		end
+		scale([i, index, KANGLEMIN, KANGLEMAX]);
+		x = i:index; y = data(1:ix, KACCE)';
+		plot(x, y, 'r');
+	end
+
+function drawBias(index, data);
+	i = 1; ix = index;
+	if index > 0
+		if index > KNBSAMPLES
+			i = index - KNBSAMPLES + 1;
+			ix = KNBSAMPLES;
+		end
+		scale([i, index, KBIASMIN, KBIASMAX]);
+		x = i:index; y = data(1:ix, KBIAS)';
+		plot(x, y, 'g');
+	end
+
+function drawAngle(index, data);
+	i = 1; ix = index;
+	if index > 0
+		if index > KNBSAMPLES
+			i = index - KNBSAMPLES + 1;
+			ix = KNBSAMPLES;
+		end
+		scale([i, index, KANGLEMIN, KANGLEMAX]);
+		x = i:index; y = data(1:ix, KANGLE)';
+		plot(x, y, 'b');
+	end
+
+@}

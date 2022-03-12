@@ -1,0 +1,328 @@
+/*
+; model_si2c1.
+; ============
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "si2c1" device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+static	volatile	bool_t		vRXSema  = FALSE;
+static	volatile	bool_t		vTXSema  = FALSE;
+
+#if (defined(__WITHSEMA__))
+static	volatile	sema_t		*vSeHandleRX[1];
+static	volatile	sema_t		*vSeHandleTX[1];
+
+LOC_CONST_STRG(aStrSemaphoreRX[]) =	KSEMAPHORE_SI2C1RX;
+LOC_CONST_STRG(aStrSemaphoreTX[]) =	KSEMAPHORE_SI2C1TX;
+#endif
+
+// Prototypes 
+// ==========
+
+static	bool_t	_writeByte(uint8_t byte);
+static	bool_t	_readByte(uint8_t *data);
+static	bool_t	_waitingForFlagOn(uint32_t flag);
+static	bool_t	_waitingForFlagOff(uint32_t flag);
+
+/*
+ * \brief si2c1_init
+ *
+ * - Initialize the manager
+ *
+ */
+void	si2c1_init(void) {
+
+	RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
+
+// Create the semaphores
+
+	#if (defined(__WITHSEMA__))
+	kern_createSyncSemaphore(aStrSemaphoreRX, &vSeHandleRX[0]);
+	kern_createSyncSemaphore(aStrSemaphoreTX, &vSeHandleTX[0]);
+	#endif
+
+// Initialize the I2C Master, default speed 100-KHz
+
+	I2C1->TIMINGR = (4<<28)				// Timing prescaler
+				  | (9<<20)				// Data setup time
+				  | (1<<16)				// Data hold time
+				  | (52<<8)				// SCL high period
+				  | (52<<0);			// SCL Low period
+
+	I2C1->CR1     = (1<<17)				// Clock stretching disabled
+			      | (1<<12)				// Analog noise filter disabled
+			      | (1<<0);				// Peripheral enable
+}
+
+/*
+ * \brief si2c1_configure
+ *
+ * - Configure the manager
+ *
+ */
+int32_t	si2c1_configure(const cnfSi2c1_t *configure) {
+
+	INTERRUPTION_OFF;
+	I2C1->CR1 &= ~I2C_CR1_PE;
+
+	switch (configure->oSpeed) {
+		default:
+		case K100KHZ: {
+			I2C1->TIMINGR = (4<<28)				// Timing prescaler
+						  | (9<<20)				// Data setup time
+						  | (1<<16)				// Data hold time
+						  | (52<<8)				// SCL high period
+						  | (52<<0);			// SCL Low period
+			break;
+		}
+		case K400KHZ: {
+			I2C1->TIMINGR = (4<<28)				// Timing prescaler
+						  | (9<<20)				// Data setup time
+						  | (1<<16)				// Data hold time
+						  | (11<<8)				// SCL high period
+						  | (12<<0);			// SCL Low period
+			break;
+		}
+	}
+	I2C1->CR1 |= I2C_CR1_PE;
+
+	vRXSema = ((configure->oKernSync & (1<<BRXSEMA)) != 0) ? TRUE : FALSE;
+	vTXSema = ((configure->oKernSync & (1<<BTXSEMA)) != 0) ? TRUE : FALSE;
+	RETURN_INT_RESTORED(KSI2C1NOERR);
+}
+
+/*
+ * \brief si2c1_write
+ *
+ * - Write a buffer
+ *
+ */
+int32_t	si2c1_write(uint8_t address, const uint8_t *buffer, uint16_t size) {
+	uint16_t	i;
+
+	if (!_waitingForFlagOff(I2C_CR2_START)) { return (KSI2C1TIMEO); }
+	if (!_waitingForFlagOn(I2C_ISR_TXE))	{ return (KSI2C1TIMEO); }
+
+	I2C1->CR2 = (0<<26)					// No packet error
+			  | (1<<25)					// Automatic end mode
+			  | (0<<24)					// No reload mode
+			  | ((size & 0xFF)<<16)		// Number of bytes to transfer
+			  | (0<<15)					// No NACK
+			  | (0<<14)					// No STOP
+			  | (0<<12)					// No HEADER 10
+			  | (0<<11)					// Address on 7 bits
+			  | (0<<10)					// Write transfer
+			  | (address<<1);			// The slave address
+	
+	I2C1->CR2 |= (1<<13);				// START
+
+	if (!_waitingForFlagOff(I2C_CR2_START))	{ return (KSI2C1TIMEO); }
+	if (!_waitingForFlagOn(I2C_ISR_TXE))	{ return (KSI2C1TIMEO); }
+	if (!_waitingForFlagOff(I2C_ISR_NACKF))	{ return (KSI2C1TIMEO); }
+
+	for (i = 0; i < size; i++) {
+		if (!_writeByte(*buffer++))			{ return (KSI2C1TIMEO); }
+	}
+
+	#if (defined(__WITHSEMA__) && defined(__SI2C1_SEMA_TX__))
+	if (vTXSema) { kern_signalSemaphore(vSeHandleTX[0]); }
+	#endif
+
+	return (KSI2C1NOERR);
+}
+
+/*
+ * \brief si2c1_read
+ *
+ * - Read n x bytes
+ *	 - if buffer[0] != 0, -> write the optional register number
+ *
+ */
+int32_t	si2c1_read(uint8_t address, uint8_t *buffer, uint16_t size) {
+	uint16_t	i;
+
+// Check if we need to transfer the optional register number
+// If yes, first send it to the peripheral,
+// then, read the data
+
+	if (*buffer != 0xFF) {
+
+// Send the register number
+
+		if (!_waitingForFlagOff(I2C_CR2_START))	{ return (KSI2C1TIMEO); }
+		if (!_waitingForFlagOn(I2C_ISR_TXE))	{ return (KSI2C1TIMEO); }
+
+		I2C1->CR2 = (0<<26)				// No packet error
+				  | (0<<25)				// No automatic end mode
+				  | (0<<24)				// Reload mode
+				  | (1<<16)				// Number of bytes to transfer
+				  | (0<<15)				// No NACK
+				  | (0<<14)				// No STOP
+				  | (0<<12)				// No HEADER 10
+				  | (0<<11)				// Address on 7 bits
+				  | (0<<10)				// Write transfer
+			 	  | (address<<1);		// The slave address
+
+		I2C1->CR2 |= (1<<13);			// START
+
+		if (!_waitingForFlagOff(I2C_CR2_START))	{ return (KSI2C1TIMEO); }
+		if (!_waitingForFlagOn(I2C_ISR_TXE))	{ return (KSI2C1TIMEO); }
+		if (!_waitingForFlagOff(I2C_ISR_NACKF))	{ return (KSI2C1TIMEO); }
+		if (!_writeByte(*buffer))				{ return (KSI2C1TIMEO); }
+	}
+
+// Read the register number content
+
+	if (!_waitingForFlagOff(I2C_CR2_START))		{ return (KSI2C1TIMEO); }
+	if (!_waitingForFlagOn(I2C_ISR_TXE))		{ return (KSI2C1TIMEO); }
+
+	I2C1->CR2 = (0<<26)				// No packet error
+			  | (1<<25)				// Automatic end mode
+			  | (0<<24)				// No reload mode
+			  | ((size & 0xFF)<<16)	// Number of bytes to transfer
+			  | (0<<15)				// No NACK
+			  | (0<<14)				// No STOP
+			  | (0<<12)				// No HEADER 10
+			  | (0<<11)				// Address on 7 bits
+			  | (1<<10)				// Read transfer
+		 	  | (address<<1);		// The slave address
+
+	I2C1->CR2 |= (1<<13);			// START
+
+	if (!_waitingForFlagOff(I2C_CR2_START))		{ return (KSI2C1TIMEO); }
+	if (!_waitingForFlagOn(I2C_ISR_TXE))		{ return (KSI2C1TIMEO); }
+
+	for (i = 0; i < size; i++) {
+		if (!_readByte(buffer++))				{ return (KSI2C1TIMEO); }
+	}
+
+	#if (defined(__WITHSEMA__) && defined(__SI2C1_SEMA_RX__))
+	if (vRXSema) { kern_signalSemaphore(vSeHandleRX[0]); }
+	#endif
+
+	return (KSI2C1NOERR);
+}
+
+/*
+ * \brief si2c1_flush
+ *
+ * - Flush the SI2C manager
+ *
+ */
+int32_t	si2c1_flush(void) {
+	volatile	sema_t	*semaphore;
+
+// Restart the RX semaphore
+
+	INTERRUPTION_OFF;
+	kern_getSemaphoreById(KSEMAPHORE_SI2C1RX, &semaphore);
+	kern_restartSemaphore(semaphore);
+	RETURN_INT_RESTORED(KSI2C1NOERR);
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief _writeByte
+ *
+ */
+static	bool_t	_writeByte(uint8_t byte) {
+
+	if (!_waitingForFlagOn(I2C_ISR_TXE)) {
+		return (FALSE);
+	}
+
+	I2C1->TXDR = byte;
+	return (TRUE);
+}
+
+/*
+ * \brief _readByte
+ *
+ */
+static	bool_t	_readByte(uint8_t *byte) {
+
+	if (!_waitingForFlagOn(I2C_ISR_RXNE)) {
+		return (FALSE);
+	}
+
+	*byte = I2C1->RXDR;
+	return (TRUE);
+}
+
+/*
+ * \brief _waitingForFlagOn
+ *
+ */
+static	bool_t	_waitingForFlagOn(uint32_t flag) {
+	uint64_t	time[2];
+  
+	kern_getTiccount(&time[0]);
+
+	while ((I2C1->ISR & flag) != flag) {
+		kern_switchFast();
+		kern_getTiccount(&time[1]);
+		if (((time[1] - time[0]) >= 1000000) && ((I2C1->ISR & flag) != flag)) {
+			return (FALSE);
+		}
+
+	}
+	return (TRUE);
+}
+
+/*
+ * \brief _waitingForFlagOff
+ *
+ */
+static	bool_t	_waitingForFlagOff(uint32_t flag) {
+	uint64_t	time[2];
+  
+	kern_getTiccount(&time[0]);
+
+	while ((I2C1->ISR & flag) == flag) {
+		kern_switchFast();
+		kern_getTiccount(&time[1]);
+		if (((time[1] - time[0]) >= 1000000) && ((I2C1->ISR & flag) == flag)) {
+			return (FALSE);
+		}
+
+	}
+	return (TRUE);
+}
+
+

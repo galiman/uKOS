@@ -1,0 +1,698 @@
+/*
+; model_imager_dcmi_dma2.
+; =======================
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.		The 2006-06-28
+; Modifs:	Nussbaum Pascal	The 2014-08-22	Added the "true" snap mode
+; Modifs:	Nussbaum Pascal	The 2014-08-28	Added the cntrl of the standby
+; Modifs:	Franzi Edo.		The 2015-04-06	Allow the acquisition of images > than QVGA
+; Modifs:	Franzi Edo.		The 2015-11-18	Corrected the SNAP mode
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 184                  $:  Revision of last commit
+; $Date:: 2017-07-17 10:50:19#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "imager" device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+extern				void		(*vExce_indIntVectors[KNBINTERRUPTIONS])(void);
+extern	volatile	uint16_t	vTimeException;
+static				void		(*vHSyncCodeRoutine)(void) = NULL;
+static				void		(*vFrameCodeRoutine)(void) = NULL;
+static				void		(*vVSyncCodeRoutine)(void) = NULL;
+static				void		(*vDMAEcCodeRoutine)(void) = NULL;
+static	volatile	bool_t		vIMSema    		   = FALSE;
+static	volatile	bool_t		vVSSema    		   = FALSE;
+static	volatile	uint8_t		vPage      		   = 0;
+static				uint8_t		*vImageI0  		   = NULL;
+static				uint8_t		*vImageE0  		   = NULL;
+static				uint8_t		*vImageE1  		   = NULL;
+static				uint8_t		*vXferLine 		   = NULL;
+static  volatile	uint8_t		vAcqMode   		   = KSNAP;
+static  volatile	uint8_t		vAcqPage   		   = KINTERNAL;
+static	volatile	uint32_t	vSize      		   = 1;
+static	volatile	uint32_t	vNbRows    		   = 0;
+static	volatile	uint32_t	vNbCols    		   = 0;
+static	volatile	uint32_t	vNbPixels  		   = 0;
+
+#if (defined(__WITHSEMA__))
+static	volatile	sema_t		*vSeHandleIM[1];
+static	volatile	sema_t		*vSeHandleVS[1];
+#endif
+
+// Module strings
+// ==============
+
+#if (defined(__WITHSEMA__))
+LOC_CONST_STRG(aStrSemaphoreIM[]) =	KSEMAPHORE_IMAGERIM;
+LOC_CONST_STRG(aStrSemaphoreVS[]) =	KSEMAPHORE_IMAGERVS;
+#endif
+
+// Prototypes
+// ==========
+
+static	int32_t	_initDCMI(void);
+static	int32_t	_initDMA2(void);
+static	int32_t	_confMode(const cnfImg0_t *configure);
+static	int32_t	_confMemo(const cnfImg0_t *configure);
+static	int32_t	_confPixe(const cnfImg0_t *configure);
+static	int32_t	_confImag(const cnfImg0_t *configure);
+static	void	aDCMI_IRQHandler(void);
+static	void	aDMA2_Stream0_IRQHandler(void);
+static	void	aDMA2_Stream1_IRQHandler(void);
+
+/*
+ * \brief imager_init
+ *
+ * - Initialize the manager
+ *
+ */
+int32_t	imager_init(void) {
+	int32_t		status;
+
+// Initialize the used interfaces
+
+	status = cb_control(KINIT, 0); if (status != KIMAGERNOERR) { return (status); }
+	status = _initDCMI();          if (status != KIMAGERNOERR) { return (status); }
+	status = _initDMA2();          if (status != KIMAGERNOERR) { return (status); }
+
+// Create the semaphores
+
+	#if (defined(__WITHSEMA__))
+	kern_createSyncSemaphore(aStrSemaphoreIM, &vSeHandleIM[0]);
+	kern_createSyncSemaphore(aStrSemaphoreVS, &vSeHandleVS[0]);
+	#endif
+
+	return (KIMAGERNOERR);
+}
+
+/*
+ * \brief imager_configure
+ *
+ * - Configure the manager
+ *
+ */
+int32_t	imager_configure(const cnfImg0_t *configure) {
+	int32_t		status = KIMAGERNOERR;
+
+// Stop the DMA streams
+
+	DMA2_Stream1->CR = 0x00000000;
+	DCMI->CR         = 0x00000000;
+	DCMI->IER        = 0x00000000;
+
+	vAcqMode  = configure->oAcqMode;
+	vAcqPage  = configure->oAcqPage;
+	vNbRows   = configure->oNbRows;
+	vNbCols   = configure->oNbCols;
+	vNbPixels = configure->oNbRows * configure->oNbCols;
+
+// Configure the manager
+
+	status = _confMode(configure); if (status != KIMAGERNOERR) { return (status); }
+	status = _confPixe(configure); if (status != KIMAGERNOERR) { return (status); }
+	status = _confMemo(configure); if (status != KIMAGERNOERR) { return (status); }
+	status = _confImag(configure); if (status != KIMAGERNOERR) { return (status); }
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF1
+				| DMA_LIFCR_CHTIF1
+				| DMA_LIFCR_CTEIF1
+				| DMA_LIFCR_CDMEIF1
+				| DMA_LIFCR_CFEIF1
+				| DMA_LIFCR_CTCIF0
+				| DMA_LIFCR_CHTIF0
+				| DMA_LIFCR_CTEIF0
+				| DMA_LIFCR_CDMEIF0
+				| DMA_LIFCR_CFEIF0;
+
+	DMA2_Stream1->CR |= DMA_SxCR_EN;
+	DCMI->CR  		 |= DCMI_CR_CROP											
+					 |  DCMI_CR_ENABLE;
+
+	if (configure->oAcqMode == KSNAP) {
+		kern_suspendProcess(10);
+	}
+	return (KIMAGERNOERR);
+}
+
+/*
+ * \brief imager_acquisition
+ *
+ * - Acquisition of an image on the device
+ *
+ */
+int32_t	imager_acquisition(void) {
+	static	bool_t	first = TRUE;
+
+	switch (vAcqMode) {
+		case KCONT: {
+			DMA2_Stream1->CR |= DMA_SxCR_EN;
+			DCMI->CR         |= DCMI_CR_CAPTURE;
+			break;
+		}
+
+// Before starting with the SNAP mode it is necessary to:
+// - Waiting for the end of the current frame (40-ms)
+// - Acknowledge the H & V interruption
+
+		default:
+		case KSNAP: {
+			if (first) {
+				kern_suspendProcess(40);
+				DCMI->ICR = DCMI_ICR_LINE_ISC;
+				DCMI->ICR = DCMI_ICR_FRAME_ISC;
+				DCMI->ICR = DCMI_ICR_VSYNC_ISC;
+				first = FALSE;
+			}
+			DMA2_Stream1->CR |= DMA_SxCR_EN;
+			DCMI->CR         |= DCMI_CR_CAPTURE;
+			
+			cb_control(KTRIGIMG, 0);
+			break;
+		}
+	}
+	return (KIMAGERNOERR);
+}
+
+/*
+ * \brief imager_getImage
+ *
+ * - Get the image pointer
+ *
+ */
+int32_t	imager_getImage(volatile void **image) {
+
+	if (vImageI0 != NULL) { *image = vImageI0; return (KIMAGERNOERR); }
+	if (vPage    == 0)    { *image = vImageE0; return (KIMAGERNOERR); }
+	else 			      { *image = vImageE1; return (KIMAGERNOERR); }
+}
+
+/*
+ * \brief imager_ctrlLeds
+ *
+ * - Control the LEDs
+ *
+ */
+int32_t	imager_ctrlLeds(uint8_t ledState) {
+
+	return (cb_control(KLEDSTATE, (uint32_t)ledState));
+}
+
+/*
+ * \brief imager_getSerialNumber
+ *
+ * - Get the serial number of the imager
+ *
+ */
+int32_t	imager_getSerialNumber(uint64_t *serialNumber) {
+
+	return (cb_getSerial(serialNumber));
+}
+
+/*
+ * \brief imager_getRegister
+ *
+ * - Get an imager register
+ *
+ */
+int32_t	imager_getRegister(uint8_t registerNb, uint16_t *value) {
+
+	return (cb_getRegister(registerNb, value));
+}
+
+/*
+ * \brief imager_putRegister
+ *
+ * - Put an image register
+ *
+ */
+int32_t	imager_putRegister(uint8_t registerNb, uint16_t value) {
+
+	return (cb_putRegister(registerNb, value));
+}
+
+/*
+ * \brief imager_standby
+ *
+ * - Put the imager in stand-by mode (KSNAP mode only)
+ *
+ */
+int32_t	imager_ctrlStandby(uint8_t mode) {
+
+	if (vAcqMode != KSNAP) {
+		return (KIMAGERBDMOD);
+	}
+
+	if (mode == KSTANDBY) { cb_control(KIMGSTBY, 0); }								
+	else 				  { cb_control(KIMGNORM, 0); }									
+	return (KIMAGERNOERR);
+}
+
+/*
+ * \brief imager_acquisition
+ *
+ * - Set the exposure time
+ *
+ */
+int32_t	imager_setExposure(uint32_t time) {
+
+	return (cb_control(KIMGEXPO, time));
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief _initDCMI
+ *
+ * - Initialize the DCMI
+ *
+ */
+static	int32_t	_initDCMI(void) {
+
+	RCC->AHB2ENR |= RCC_AHB2ENR_DCMIEN;
+
+	vExce_indIntVectors[DCMI_IRQn]	= aDCMI_IRQHandler;
+	NVIC->IP[DCMI_IRQn]     		= (KINT_LEVEL_PERIPH<<4);
+	NVIC->ISER[2]           	   |= (1<<(DCMI_IRQn & 0x1F));
+
+	DCMI->CR	  = 0x00000000;
+	DCMI->IER     = 0x00000000;
+	DCMI->CWSTRTR = (0<<16) | 0;
+	return (KIMAGERNOERR);
+}
+
+/*
+ * \brief _initDMA2
+ *
+ * - Initialize the DMA2 stream 1 for the DCMI transfer
+ *						 stream 0 for the memory-to-memory transfer
+ *
+ */
+static	int32_t	_initDMA2(void) {
+
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;
+
+	vExce_indIntVectors[DMA2_Stream1_IRQn] 	= aDMA2_Stream1_IRQHandler;
+	vExce_indIntVectors[DMA2_Stream0_IRQn] 	= aDMA2_Stream0_IRQHandler;
+	NVIC->IP[DMA2_Stream1_IRQn]				= (KINT_LEVEL_PERIPH<<4);
+	NVIC->IP[DMA2_Stream0_IRQn]				= (KINT_LEVEL_PERIPH<<4);
+	NVIC->ISER[1]						   |= (1<<(DMA2_Stream1_IRQn & 0x1F));
+	NVIC->ISER[1]						   |= (1<<(DMA2_Stream0_IRQn & 0x1F));
+
+// Stream 1 (DCMI to vLine or to vImage) transfer
+//
+// Direct mode disable
+// FIFO full
+// Select the channel 1 (stream 1)
+// Priority medium
+// Memory size 32-bits
+// Peripheral size 32-bits
+// Memory auto incremented
+// Transfer complete interruption
+
+	DMA2_Stream1->CR  = 0x00000000;
+	DMA2_Stream1->PAR = (uint32_t)(DCMI_BASE+0x28);
+	DMA2_Stream1->FCR = DMA_SxFCR_DMDIS										
+					  | DMA_SxFCR_FTH_1										
+					  | DMA_SxFCR_FTH_0;
+
+	DMA2_Stream1->CR = DMA_SxCR_CHSEL_0										
+					 | DMA_SxCR_PL_0											
+					 | DMA_SxCR_MSIZE_1										
+					 | DMA_SxCR_PSIZE_1										
+					 | DMA_SxCR_MINC											
+					 | DMA_SxCR_TCIE;
+
+// Stream 0 (vLine to vImageEx(i)) transfer
+//
+// Direct mode disable
+// FIFO full
+// Select the channel 1 (stream 0)
+// Priority high
+// Source size 32-bits
+// Destination size 32-bits
+// Source auto incremented
+// Destination auto incremented
+// Memory-to-memory
+// Transfer complete interruption
+// Burst xfers of 4 x 32-bits
+
+	DMA2_Stream0->CR  = 0x00000000;
+	DMA2_Stream0->PAR = (uint32_t)vXferLine;
+	DMA2_Stream0->FCR = DMA_SxFCR_DMDIS
+					  | DMA_SxFCR_FTH_1
+					  | DMA_SxFCR_FTH_0;
+
+	DMA2_Stream0->CR = DMA_SxCR_CHSEL_0
+					 | DMA_SxCR_PL_1							
+					 | DMA_SxCR_MSIZE_1
+					 | DMA_SxCR_PSIZE_1
+					 | DMA_SxCR_MINC
+					 | DMA_SxCR_PINC
+					 | DMA_SxCR_DIR_1
+					 | DMA_SxCR_TCIE
+					 | DMA_SxCR_MBURST_0
+					 | DMA_SxCR_PBURST_0;
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF1
+				| DMA_LIFCR_CHTIF1
+				| DMA_LIFCR_CTEIF1
+				| DMA_LIFCR_CDMEIF1
+				| DMA_LIFCR_CFEIF1
+				| DMA_LIFCR_CTCIF0
+				| DMA_LIFCR_CHTIF0
+				| DMA_LIFCR_CTEIF0
+				| DMA_LIFCR_CDMEIF0
+				| DMA_LIFCR_CFEIF0;
+
+	return (KIMAGERNOERR);
+}
+
+/*
+ * \brief _confMode
+ *
+ * - Configure the acquisition mode [ KCONT, KSNAP, KSYNC ]
+ *
+ */
+static	int32_t	_confMode(const cnfImg0_t *configure) {
+
+	switch (configure->oAcqMode) {
+
+// Select the channel 1 (stream 1)
+//
+// Priority medium
+// Memory size 32-bits
+// Peripheral size 32-bits
+// Memory auto incremented
+// Transfer complete interruption
+// Circular mode
+
+		case KCONT: {
+			DMA2_Stream1->CR = DMA_SxCR_CHSEL_0						
+							 | DMA_SxCR_PL_0							
+							 | DMA_SxCR_MSIZE_1						
+							 | DMA_SxCR_PSIZE_1						
+							 | DMA_SxCR_MINC							
+							 | DMA_SxCR_TCIE							
+							 | DMA_SxCR_CIRC;
+
+			break;
+		}
+
+// Select the channel 1 (stream 1)
+//
+// Priority medium
+// Memory size 32-bits
+// Peripheral size 32-bits
+// Memory auto incremented
+// Transfer complete interruption
+// Capture mode
+
+		default:
+		case KSNAP: {
+			DMA2_Stream1->CR = DMA_SxCR_CHSEL_0						
+							 | DMA_SxCR_PL_0							
+							 | DMA_SxCR_MSIZE_1						
+							 | DMA_SxCR_PSIZE_1						
+							 | DMA_SxCR_MINC							
+							 | DMA_SxCR_TCIE;
+
+			DCMI->CR |= DCMI_CR_CM;
+			break;
+		}
+		case KSYNC:	{
+			break;
+		}
+	}
+	return (KIMAGERNOERR);
+}
+
+/*
+ * \brief _confPixe
+ *
+ * - Configure the pixel mode [ PIX8BITS, PIX10BITS, PIX12BITS, PIX14BITS ]
+ *
+ */
+static	int32_t	_confPixe(const cnfImg0_t *configure) {
+	uint32_t	ndtr;
+
+	if (configure->oAcqPage == KINTERNAL) { ndtr = vNbPixels; }
+	else								  { ndtr = vNbCols;   }
+
+	vSize              = 2;
+	DMA2_Stream0->NDTR = vNbCols/2;
+	DMA2_Stream1->NDTR = ndtr/2;
+
+	switch (configure->oPixMode) {												
+		default:
+		case PIX8BITS:	{
+			vSize = 1;
+			cb_control(KPIXMODE, 8);
+			DMA2_Stream0->NDTR = vNbCols/4;
+			DMA2_Stream1->NDTR = ndtr/4;
+			break;
+		}
+		case PIX10BITS: {
+			cb_control(KPIXMODE, 10);
+			DCMI->CR |= DCMI_CR_EDM_0;
+			break;
+		}
+		case PIX12BITS: {
+			cb_control(KPIXMODE, 12);
+			DCMI->CR |= DCMI_CR_EDM_1;
+			break;
+		}
+		case PIX14BITS: {
+			cb_control(KPIXMODE, 14);
+			DCMI->CR |= DCMI_CR_EDM_0 | DCMI_CR_EDM_1;
+			break;
+		}
+	}
+	return (KIMAGERNOERR);
+}
+
+/*
+ * \brief _confMemo
+ *
+ * - Configure the memory buffers
+ *
+ */
+static	int32_t	_confMemo(const cnfImg0_t *configure) {
+	int32_t		status = KIMAGERNOERR;
+
+	if (vXferLine != NULL) { syos_free(vXferLine); }
+	if (vImageI0  != NULL) { syos_free(vImageI0);  }
+	if (vImageE0  != NULL) { syos_free(vImageE0);  }
+	if (vImageE1  != NULL) { syos_free(vImageE1);  }
+
+	switch (configure->oAcqPage) {
+		case KINTERNAL: {
+			vXferLine = NULL;
+			vImageI0  = (uint8_t *)syos_malloc(KINTERNAL, (vNbPixels*vSize));
+			if (vImageI0 == NULL) { status = KIMAGERNOMEM; }
+
+			DMA2_Stream1->M0AR = (uint32_t)vImageI0;
+			break;
+		}
+		default:
+		case KEXTERNAL: {
+			vPage	  = 1;
+			vXferLine = (uint8_t *)syos_malloc(KINTERNAL, (vNbCols*vSize));
+			vImageE0  = (uint8_t *)syos_malloc(KEXTERNAL, (vNbPixels*vSize));
+			vImageE1  = (uint8_t *)syos_malloc(KEXTERNAL, (vNbPixels*vSize));
+
+			if (vXferLine == NULL) { status = KIMAGERNOMEM; }
+			if (vImageE0  == NULL) { status = KIMAGERNOMEM; }
+			if (vImageE1  == NULL) { status = KIMAGERNOMEM; }
+
+			DMA2_Stream0->PAR  = (uint32_t)vXferLine;
+			DMA2_Stream0->M0AR = (uint32_t)vImageE0;
+			DMA2_Stream1->M0AR = (uint32_t)vXferLine;
+			break;
+		}
+	}
+	return (status);
+}
+
+/*
+ * \brief _confImag
+ *
+ * - Configure the imager
+ *
+ */
+static	int32_t	_confImag(const cnfImg0_t *configure) {
+	int32_t		status = KIMAGERNOERR;
+
+// The crop window area
+
+	if ((configure->oNbRows + configure->oStRows) > KNBROWS)      { return (KIMAGERCNERR); }
+	if ((configure->oNbCols + configure->oStCols) > KNBCOLS)      { return (KIMAGERCNERR); }
+	DCMI->CWSIZER = ((configure->oNbRows-1)<<16) | (configure->oNbCols-1);
+	DCMI->CWSTRTR = ( configure->oStRows   <<16) | (configure->oStCols);
+
+// Configure the imager
+
+	status = cb_configure(configure); if (status != KIMAGERNOERR) { return (status);       }
+
+// The semaphore mode
+
+	vIMSema = ((configure->oKernSync & (1<<BIMSEMA)) != 0) ? TRUE : FALSE;
+	vVSSema = ((configure->oKernSync & (1<<BVSSEMA)) != 0) ? TRUE : FALSE;
+
+// The interruption callbacks
+// Start the stream
+
+	vHSyncCodeRoutine = configure->oHSync;
+	vFrameCodeRoutine = configure->oFrame;
+	vVSyncCodeRoutine = configure->oVSync;
+	vDMAEcCodeRoutine = configure->oDMAEc;
+
+	if (vHSyncCodeRoutine != NULL) { DCMI->IER |= DCMI_IER_LINE_IE;  }
+	if (vFrameCodeRoutine != NULL) { DCMI->IER |= DCMI_IER_FRAME_IE; }
+	if (vVSyncCodeRoutine != NULL) { DCMI->IER |= DCMI_IER_VSYNC_IE; }
+	return (status);
+}
+
+/*
+ * \brief aDCMI_IRQHandler
+ *
+ * - HSYNC interruption
+ * - VSYNC interruption
+ *
+ */
+static	void	aDCMI_IRQHandler(void) {
+	void	(*go)(void);
+
+// HSYNC - Horizontal callback
+
+	if ((DCMI->RISR & DCMI_RISR_LINE_RIS) != 0) {										
+		DCMI->ICR = DCMI_ICR_LINE_ISC;
+		if (vHSyncCodeRoutine != NULL) {											
+			go = vHSyncCodeRoutine;
+			go();
+		}
+	}
+
+// Frame - Frame callback
+
+	if ((DCMI->RISR & DCMI_RISR_FRAME_RIS) != 0) {
+		DCMI->ICR = DCMI_ICR_FRAME_ISC;
+		if (vFrameCodeRoutine != NULL) {
+			go = vFrameCodeRoutine;
+			go();
+		}
+	}
+
+// VSYNC - Vertical callback
+
+	if ((DCMI->RISR & DCMI_RISR_VSYNC_RIS) != 0) {										
+		DCMI->ICR = DCMI_ICR_VSYNC_ISC;
+		if (vVSyncCodeRoutine != NULL) {											
+			go = vVSyncCodeRoutine;
+			go();
+
+			#if (defined(__WITHSEMA__) && defined(__IMAGER_SEMA_VS__))			
+			if (vVSSema) { kern_signalSemaphore(vSeHandleVS[0]); }
+			#endif																
+		}
+	}
+
+	PREEMPTION;
+}
+
+/*
+ * \brief aDMA2_Stream1_IRQHandler
+ *
+ * - DMA interruption
+ *
+ */
+static	void	aDMA2_Stream1_IRQHandler(void) {
+	void	(*go)(void);
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF1;
+
+	switch (vAcqPage) {
+		case KINTERNAL: {
+			if (vDMAEcCodeRoutine != NULL) {
+				go = vDMAEcCodeRoutine;
+				go();
+			}
+
+			#if (defined(__WITHSEMA__) && defined(__IMAGER_SEMA_IM__))
+			if (vIMSema) { kern_signalSemaphore(vSeHandleIM[0]); }
+			#endif
+			
+			break;
+		}
+		default:
+		case KEXTERNAL: {
+			DMA2_Stream1->CR |= DMA_SxCR_EN;
+			DMA2_Stream0->CR |= DMA_SxCR_EN;
+			break;
+		}
+	}
+
+	PREEMPTION;
+}
+
+/*
+ * \brief aDMA2_Stream0_IRQHandler
+ *
+ * - DMA interruption
+ *
+ */
+static	void	aDMA2_Stream0_IRQHandler(void) {
+			void		(*go)(void);
+	static	uint16_t	row = 0;
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF0;
+ 
+	if (vPage == 0) { DMA2_Stream0->M0AR = (uint32_t)vImageE1+(vNbCols*vSize*++row); }
+	else            { DMA2_Stream0->M0AR = (uint32_t)vImageE0+(vNbCols*vSize*++row); }
+ 
+	if (row >= vNbRows) {															
+		row = 0;
+		if (vPage == 0) { DMA2_Stream0->M0AR = (uint32_t)vImageE0; vPage = 1; }
+		else            { DMA2_Stream0->M0AR = (uint32_t)vImageE1; vPage = 0; }
+		if (vDMAEcCodeRoutine != NULL) {											
+			go = vDMAEcCodeRoutine;
+			go();
+		}																		
+
+		#if (defined(__WITHSEMA__) && defined(__IMAGER_SEMA_IM__))				
+		if (vIMSema) { kern_signalSemaphore(vSeHandleIM[0]); }
+		#endif																	
+
+	}
+
+	PREEMPTION;
+}
+

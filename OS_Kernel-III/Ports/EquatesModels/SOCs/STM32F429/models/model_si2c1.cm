@@ -1,0 +1,337 @@
+/*
+; model_si2c1.
+; ============
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "si2c1" device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+static	volatile	bool_t		vSending = FALSE;
+static	volatile	bool_t		vRXSema  = FALSE;
+static	volatile	bool_t		vTXSema  = FALSE;
+
+#if (defined(__WITHSEMA__))
+static	volatile	sema_t		*vSeHandleRX[1];
+static	volatile	sema_t		*vSeHandleTX[1];
+
+LOC_CONST_STRG(aStrSemaphoreRX[]) =	KSEMAPHORE_SI2C1RX;
+LOC_CONST_STRG(aStrSemaphoreTX[]) =	KSEMAPHORE_SI2C1TX;
+#endif
+
+// I2c interface
+
+#define	KWRITE		0
+#define	KREAD		1
+#define	KACK		0
+#define	KNACK		1
+#define	KV100KHZ	100000
+#define	KV400KHZ	400000
+
+// Prototypes 
+// ==========
+
+static	bool_t	_startTransfer(void);
+static	bool_t	_stopTransfer(void);
+static	bool_t	_sendAddr(uint32_t address, bool_t write);
+static	bool_t	_writeByte(uint8_t byte);
+static	bool_t	_readByte(uint8_t *data, bool_t ack);
+static	bool_t	_waitingForSetFlagSR1(uint16_t flag);
+static	bool_t	_waitingForResetFlagSR2(uint16_t flag);
+
+/*
+ * \brief si2c1_init
+ *
+ * - Initialize the manager
+ *
+ */
+void	si2c1_init(void) {
+
+	RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
+
+// Create the semaphores
+
+	#if (defined(__WITHSEMA__))
+	kern_createSyncSemaphore(aStrSemaphoreRX, &vSeHandleRX[0]);
+	kern_createSyncSemaphore(aStrSemaphoreTX, &vSeHandleTX[0]);
+	#endif
+
+// Initialize the I2C Master, default speed 100-KHz
+
+	I2C1->CR2	 = (KFREQUENCY_INTERFACE/KFREQUENCY_1000000);
+	I2C1->TRISE  = (KFREQUENCY_INTERFACE/KFREQUENCY_1000000) + 1;
+	I2C1->CCR    = KFREQUENCY_INTERFACE/(KV100KHZ*2);
+	I2C1->OAR1	 = 0x00;
+	I2C1->CR1	 = I2C_CR1_ACK;
+	I2C1->CR1   |= I2C_CR1_PE;
+}
+
+/*
+ * \brief si2c1_configure
+ *
+ * - Configure the manager
+ *
+ */
+int32_t	si2c1_configure(const cnfSi2c1_t *configure) {
+
+	INTERRUPTION_OFF;
+	I2C1->CR1 &= ~I2C_CR1_PE;
+
+	switch (configure->oSpeed) {
+		default:
+		case K100KHZ: {
+			I2C1->CR2	= (KFREQUENCY_INTERFACE/KFREQUENCY_1000000);
+			I2C1->TRISE = (KFREQUENCY_INTERFACE/KFREQUENCY_1000000) + 1;
+			I2C1->CCR   = KFREQUENCY_INTERFACE/(KV100KHZ*2);
+			break;
+		}
+		case K400KHZ: {
+			I2C1->CR2	= (KFREQUENCY_INTERFACE/KFREQUENCY_1000000);
+			I2C1->TRISE = ((KFREQUENCY_INTERFACE/KFREQUENCY_1000000)*3/10) + 1;
+			I2C1->CCR   = (KFREQUENCY_INTERFACE/(KV400KHZ*3)) | I2C_CCR_FS;
+			break;
+		}
+	}
+	I2C1->CR1 |= I2C_CR1_PE;
+
+	vRXSema = ((configure->oKernSync & (1<<BRXSEMA)) != 0) ? TRUE : FALSE;
+	vTXSema = ((configure->oKernSync & (1<<BTXSEMA)) != 0) ? TRUE : FALSE;
+	RETURN_INT_RESTORED(KSI2C1NOERR);
+}
+
+/*
+ * \brief si2c1_write
+ *
+ * - Write a buffer
+ *
+ */
+int32_t	si2c1_write(uint8_t address, const uint8_t *buffer, uint16_t size) {
+	uint16_t	i;
+
+	if (!_startTransfer())			 { return (KSI2C1TIMEO); }
+	if (!_sendAddr(address, KWRITE)) { return (KSI2C1TIMEO); }
+
+	for (i = 0; i < size; i++) {
+		if (!_writeByte(*buffer++))	 { return (KSI2C1TIMEO); }
+	}
+
+	if (!_stopTransfer())			 { return (KSI2C1TIMEO); }
+
+	#if (defined(__WITHSEMA__) && defined(__SI2C1_SEMA_TX__))
+	if (vTXSema) { kern_signalSemaphore(vSeHandleTX[0]); }
+	#endif
+
+	return (KSI2C1NOERR);
+}
+
+/*
+ * \brief si2c1_read
+ *
+ * - Read n x bytes
+ *	 - if buffer[0] != 0, -> write the optional register number
+ *
+ */
+int32_t	si2c1_read(uint8_t address, uint8_t *buffer, uint16_t size) {
+	uint16_t	i;
+
+	if (!_startTransfer())						{ return (KSI2C1TIMEO); }
+	if (!_sendAddr(address, KWRITE))			{ return (KSI2C1TIMEO); }
+
+// Check if we need to transfer the optional register number
+
+	if (*buffer != 0xFF) {
+		if (!_writeByte(*buffer))				{ return (KSI2C1TIMEO); }
+	}
+
+// Now read 1, 2 or N bytes; 3 different cases
+
+	if (!_startTransfer())						{ return (KSI2C1TIMEO); }
+	if (!_sendAddr(address, KREAD))				{ return (KSI2C1TIMEO); }
+
+	switch (size) {
+		case 1: {
+			if (!_readByte(buffer++, KNACK))	{ return (KSI2C1TIMEO); }
+			break;
+		}
+		case 2: {
+			if (!_readByte(buffer++, KACK))		{ return (KSI2C1TIMEO); }
+			if (!_readByte(buffer++, KNACK))	{ return (KSI2C1TIMEO); }
+			break;
+		}
+		default: {
+			for (i = 0; i < (size-1); i++) {
+				if (!_readByte(buffer++, KACK))	{ return (KSI2C1TIMEO); }
+			}
+
+			if (!_readByte(buffer++, KNACK))	{ return (KSI2C1TIMEO); }
+			break;
+		}
+	}
+
+	if (!_stopTransfer())						{ return (KSI2C1TIMEO); }
+
+	#if (defined(__WITHSEMA__) && defined(__SI2C1_SEMA_RX__))
+	if (vRXSema) { kern_signalSemaphore(vSeHandleRX[0]); }
+	#endif
+
+	return (KSI2C1NOERR);
+}
+
+/*
+ * \brief si2c1_flush
+ *
+ * - Flush the SI2C manager
+ *
+ */
+int32_t	si2c1_flush(void) {
+	volatile	sema_t	*semaphore;
+
+// Restart the RX semaphore
+
+	INTERRUPTION_OFF;
+	kern_getSemaphoreById(KSEMAPHORE_SI2C1RX, &semaphore);
+	kern_restartSemaphore(semaphore);
+	RETURN_INT_RESTORED(KSI2C1NOERR);
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief _startTransfer
+ *
+ */
+static	bool_t	_startTransfer(void) {
+
+	if ((I2C1->CR1 & I2C_CR1_ACK) != 0) {
+		I2C1->CR1 &= ~I2C_CR1_ACK;
+	}
+
+	I2C1->CR1 |= I2C_CR1_START;
+	return (_waitingForSetFlagSR1(I2C_SR1_SB));
+}
+
+/*
+ * \brief _stopTransfer
+ *
+ */
+static	bool_t	_stopTransfer(void) {
+
+	I2C1->CR1 |= I2C_CR1_STOP;
+	return (_waitingForResetFlagSR2(I2C_SR2_BUSY));
+}
+
+/*
+ * \brief _sendAddr
+ *
+ */
+static	bool_t	_sendAddr(uint32_t address, bool_t write) {
+				bool_t		status;
+	volatile	uint16_t	dummy __attribute__ ((unused));
+
+	I2C1->DR = (write == KWRITE) ? ((uint8_t)((address<<1) | 0)) : ((uint8_t)((address<<1) | 1));
+
+	status = _waitingForSetFlagSR1(I2C_SR1_ADDR);
+	dummy = I2C1->SR2;
+	return (status);
+}
+
+/*
+ * \brief _writeByte
+ *
+ */
+static	bool_t	_writeByte(uint8_t byte) {
+
+	I2C1->DR = byte;
+	return (_waitingForSetFlagSR1(I2C_SR1_BTF));
+}
+
+/*
+ * \brief _readByte
+ *
+ */
+static	bool_t	_readByte(uint8_t *data, bool_t ack) {
+
+	I2C1->CR1 = (ack == KACK) ? (I2C1->CR1 | I2C_CR1_ACK) : (I2C1->CR1 & ~I2C_CR1_ACK);
+
+	if (!_waitingForSetFlagSR1(I2C_SR1_RXNE)) {
+		return (FALSE);
+	}
+
+	*data = I2C1->DR;
+	return (TRUE);
+}
+
+/*
+ * \brief _waitingForSetFlagSR1
+ *
+ */
+static	bool_t	_waitingForSetFlagSR1(uint16_t flag) {
+	uint64_t	time[2];
+  
+	kern_getTiccount(&time[0]);
+
+	while ((I2C1->SR1 & flag) != flag) {
+		kern_switchFast();
+		kern_getTiccount(&time[1]);
+		if (((time[1] - time[0]) >= 100000) && ((I2C1->SR1 & flag) != flag)) {
+			return (FALSE);
+		}
+
+	}
+	return (TRUE);
+}
+
+/*
+ * \brief _waitingForResetFlagSR2
+ *
+ */
+static	bool_t	_waitingForResetFlagSR2(uint16_t flag) {
+	uint64_t	time[2];
+  
+	kern_getTiccount(&time[0]);
+
+	while ((I2C1->SR2 & flag) == flag) {
+		kern_switchFast();
+		kern_getTiccount(&time[1]);
+		if (((time[1] - time[0]) >= 100000) && ((I2C1->SR2 & flag) == flag)) {
+			return (FALSE);
+		}
+
+	}
+	return (TRUE);
+}
+
+

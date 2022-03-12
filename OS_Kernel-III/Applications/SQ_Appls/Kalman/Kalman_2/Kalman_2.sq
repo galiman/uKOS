@@ -1,0 +1,126 @@
+
+//------------------------------------------------------------------------
+// Author:	Franzi Edo.	The 2001-02-25
+// Modifs: 
+//
+// SVN:
+// $Author:: efr               $:  Author of last commit
+// $Rev:: 161                  $:  Revision of last commit
+// $Date:: 2017-06-15 15:01:25#$:  Date of last commit		
+//
+// Project:	uKOS
+// Goal:	Kalman test 2: Multi variables
+//
+//			Compensate the gyro drift.
+//			Compute the angular value.
+//
+//			V(k) = V(K-1) + w(k)	w(k) = noise
+//			A = State transition matrix
+//			B = Control input matrix
+//			H = Transformation matrix
+//			Q = Process covariance
+//			R = Measurement covariance
+//			P = Prior error covariance matrix
+//			I = Identity matrix
+//			u = Control input vector
+//			x = State of the system
+//
+//			Prediction:
+//			x(k)  = A . x(k-1) + B . u(k)
+//			P(k)  = A . P(k-1) . A' + Q
+//
+//			Observation:
+//			y(k)  = z(k) - H . x(k)
+//			S     = H . P(k) . H' + R
+//
+//			Update:
+//			K     = (P(k) . H') / S
+//			x(k)  = x(k) + K . y(k)
+//			P(k)  = (I - K . H) . P(k)
+//
+//   (c) 1992-2017, Franzi Edo.
+//   --------------------------
+//                                              __ ______  _____
+//   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+//   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+//   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+//                                     \__,_/_/ |_\____//____/
+//   edo.franzi@ukos.ch
+//
+//   This program is free software: you can redistribute it and/or modify
+//   it under the terms of the GNU Affero General Public License as published by
+//   the Free Software Foundation, either version 3 of the License, or
+//   (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+//   GNU Affero General Public License for more details.
+//
+//   You should have received a copy of the GNU Affero General Public License
+//   along with this program. If not, see <http://www.gnu.org/licenses/>.
+//
+//------------------------------------------------------------------------
+
+// System description
+// ------------------
+
+// Initial values
+
+KTSAMPLING	= 0.01;								// 1 k = 0.01s
+
+KNBPERIODS	= 50;								// Number of periods
+KTPERIOD	= 1;								// Period [s]
+KNBSAMPLES	= (KNBPERIODS*KTPERIOD)/KTSAMPLING;	// Number of samples
+Kd			= pi/2;								// Mouvement -pi/2..+pi/2 [rad]
+Kg			= Kd*2*pi							// Gyro constant [rad/s]
+Kb			= 7.3;								// Gyro drift [rad/s/h]
+Kn			= 0.5;								// Noise
+
+A			= [1, KTSAMPLING; 0, 1];			// State transition matrix
+B			= [-KTSAMPLING; 1];					// Control input matrix
+H			= [1, 0];							// Transformation matrix
+Q			= [0.005, 0; 0, 0.005];				// Process covariance (the model is well known)
+R			= 0.7;								// Measurement covariance (noisy measurements)
+P			= [0, 0; 0, 0];						// Prior error covariance matrix
+I			= [1, 0; 0, 1];						// Identity matrix
+x			= [0; 0];							// Initial state of the system, angle = 0, speed = 0
+
+
+// Simulate an angular displacement (-pi/2..+pi/2 rad)
+// Consider a linear gyro drift 
+
+angle  = Kd * sin((2*pi/KTPERIOD)*(1:KNBSAMPLES+1)*KTSAMPLING);
+drift  = Kb * ([1:KNBSAMPLES+1] / (KNBSAMPLES+1));
+
+// Gyro response:
+// - angular speed + bias.
+// - By definition the angular speed is the derivative of the displacement
+
+angularSpeed = Kg * cos((2*pi/KTPERIOD)*(1:KNBSAMPLES+1)*KTSAMPLING);
+measure		 = angle + drift + (Kn * (rand(1, KNBSAMPLES+1) - 0.5));
+
+for i = 1:KNBSAMPLES
+
+// Prediction step
+
+	x(:, i+1) = A * x(:, i);
+	P         = A * P * A' + Q;
+
+// Observation step
+
+	y = measure(i) - H * x(:, i+1);
+	S = H * P * H' + R;
+
+// Update step
+
+	K         = (P * H') / S;
+	x(:, i+1) = x(:, i+1) + K * y;
+	P         = (I - K * H) * P;
+end
+
+// Display the results
+
+plot(measure, 'g');
+plot(x(1,:) - drift, 'r');
+plot(angle, 'b');

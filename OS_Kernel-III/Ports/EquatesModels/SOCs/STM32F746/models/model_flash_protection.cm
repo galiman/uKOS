@@ -1,0 +1,85 @@
+/*
+; model_flash_protection.
+; =======================
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "flash" protection.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+/*
+ * \brief flash_protect
+ *
+ * - Protect the flash from reading
+ *   The used protection could be: level 0, level 1 and level 2
+ *   !!! the flash cannot be reprogrammed anymore in level 2 !!!
+ *
+ */
+void	flash_protect(uint8_t level) {
+	uint32_t	optcr;
+
+// Allow operations on the Flash
+
+	FLASH->OPTKEYR = 0x08192A3B;
+	FLASH->OPTKEYR = 0x4C5D6E7F;
+
+// Set the selected level 0, 1 or 2
+
+	optcr = FLASH->OPTCR;
+	optcr &= ~(0xFF<<8);
+	
+	switch (level) {
+		case 0x00: { optcr |= (0x55<<8); break; }
+		case 0x01: { optcr |= (0xAA<<8); break; }
+		case 0x02: { optcr |= (0xCC<<8); break; }
+		default:   { optcr |= (0x55<<8); break; }
+	}
+	FLASH->OPTCR = optcr;
+
+// Validate the choice
+
+	kern_suspendProcess(1);
+	optcr = FLASH->OPTCR;
+	optcr &= ~(FLASH_OPTCR_OPTSTRT | FLASH_OPTCR_OPTLOCK);
+	optcr |= FLASH_OPTCR_OPTSTRT;
+	FLASH->OPTCR = optcr;
+
+	kern_suspendProcess(1);
+	optcr = FLASH->OPTCR;
+	optcr &= ~(FLASH_OPTCR_OPTSTRT | FLASH_OPTCR_OPTLOCK);
+	optcr |= FLASH_OPTCR_OPTLOCK;
+	FLASH->OPTCR = optcr;
+}
+

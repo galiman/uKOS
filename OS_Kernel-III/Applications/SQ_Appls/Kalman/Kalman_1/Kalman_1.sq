@@ -1,0 +1,110 @@
+
+//------------------------------------------------------------------------
+// Author:	Franzi Edo.	The 2001-02-25
+// Modifs: 
+//
+// SVN:
+// $Author:: efr               $:  Author of last commit
+// $Rev:: 161                  $:  Revision of last commit
+// $Date:: 2017-06-15 15:01:25#$:  Date of last commit		
+//
+// Project:	uKOS
+// Goal:	Kalman test 1: single variable
+//
+//			Extraction of a Sin value from a large measuring noise.
+//			Recover the true value.
+//
+//			V(k) = V(K-1) + w(k)	w(k) = noise
+//			A = State transition matrix
+//			B = Control input matrix
+//			H = Transformation matrix
+//			Q = Process covariance
+//			R = Measurement covariance
+//			P = Prior error covariance matrix
+//			I = Identity matrix
+//			u = Control input vector
+//			x = State of the system
+//
+//			Prediction:
+//			x(k)  = A . x(k-1) + B . u(k)
+//			P(k)  = A . P(k-1) . A' + Q
+//
+//			Observation:
+//			y(k)  = z(k) - H . x(k)
+//			S     = H . P(k) . H' + R
+//
+//			Update:
+//			K     = (P(k) . H') / S
+//			x(k)  = x(k) + K . y(k)
+//			P(k)  = (I - K . H) . P(k)
+//
+//   (c) 1992-2017, Franzi Edo.
+//   --------------------------
+//                                              __ ______  _____
+//   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+//   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+//   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+//                                     \__,_/_/ |_\____//____/
+//   edo.franzi@ukos.ch
+//
+//   This program is free software: you can redistribute it and/or modify
+//   it under the terms of the GNU Affero General Public License as published by
+//   the Free Software Foundation, either version 3 of the License, or
+//   (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+//   GNU Affero General Public License for more details.
+//
+//   You should have received a copy of the GNU Affero General Public License
+//   along with this program. If not, see <http://www.gnu.org/licenses/>.
+//
+//------------------------------------------------------------------------
+
+// System description
+// ------------------
+
+// Initial values
+
+A			= 1;				// State transition matrix
+B			= 1;				// Control input matrix
+H			= 1;				// Transformation matrix
+Q			= 0.000000001;		// Process covariance (the model is well known)
+R			= 0.9;				// Measurement covariance (very noisy measurements)
+P			= 1;				// Prior error covariance matrix
+I			= 1;				// Identity matrix
+u			= 1;				// Control input vector
+x			= 1;				// Initial state of the system
+KNBSAMPLES	= 1000;				// Number of samples
+KPERIOD		= 20;				// Period
+
+// Simulate a noisy measurement
+
+measure      = sin((1:KNBSAMPLES) / KPERIOD);
+noisyMeasure = measure + (1.63*(rand(1, KNBSAMPLES) - 0.5));
+
+for i = 1:KNBSAMPLES
+
+// Prediction step
+
+	x(i+1) = A * x(i) + B * u * (sin((i+1) / KPERIOD) - sin(i / KPERIOD));
+	P      = A * P * A' + Q;
+
+// Observation step
+
+	y = noisyMeasure(i) - H * x(i+1);
+	S = H * P * H' + R;
+
+// Update step
+
+	K      = (P * H') / S;
+	x(i+1) = x(i+1) + K * y;
+	P      = (I - K * H) * P;
+end
+
+// Display the results
+
+plot(noisyMeasure, 'g');
+plot(measure, 'b');
+plot(x, 'r');

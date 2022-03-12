@@ -1,0 +1,312 @@
+/*
+; cache.
+; ======
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2016-08-09
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Cortex M7 L1 cache management.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+#define	INVALIDATE_CACHE		SCB->DCISW
+#define	CLEAR_INVALIDATE_CACHE	SCB->DCCISW
+#define	CLEAR_CACHE				SCB->DCCSW
+
+// Prototypes 
+// ==========
+
+inline	uint32_t _clz(uint32_t data);
+
+/*
+ * \brief cache_D_Enable
+ *
+ * - Enable the data cache
+ *
+ */
+inline	void	cache_D_Enable(void) {
+	uint32_t	ccsidr, sShift, wShift, sw;
+	uint32_t	numSets, associativity, tmpAssociativity;
+
+// Level 1 data cache
+
+	SCB->CSSELR = (0<<1) | (0<<0);
+	DATA_SYNC_BARRIER;
+
+// Number of sets - 1
+// Number of shift (2 - log(2) of the number of words in the cache line
+//                             0x0 = 4 words in the cache line
+//                             0x1 = 8 words in the cache line
+// Number of ways
+
+	ccsidr        = SCB->CCSIDR;
+	numSets       = ((ccsidr & (0x7FFF<<13))>>13);
+	sShift        = (ccsidr & 7) + 4;
+	associativity = ((ccsidr & (0x3FF<<3))>>3);
+	wShift        = (_clz(associativity) & 0x1F);
+
+	DATA_SYNC_BARRIER;
+
+// Invalidate D-Cache
+
+	do {                                   
+		tmpAssociativity = associativity;
+		do {
+			sw = ((tmpAssociativity<<wShift) | (numSets<<sShift));
+			INVALIDATE_CACHE = sw;
+		} while (tmpAssociativity--);
+	} while (numSets--);
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+
+// Enable D-Cache
+
+	SCB->CCR |= (1<<16);
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+}
+
+/*
+ * \brief cache_D_Disable
+ *
+ * - Disable the data cache
+ *
+ */
+inline	void	cache_D_Disable(void) {
+	uint32_t	ccsidr, sShift, wShift, sw;
+	uint32_t	numSets, associativity, tmpAssociativity;
+
+// Level 1 data cache
+
+	SCB->CSSELR = (0<<1) | (0<<0);
+	DATA_SYNC_BARRIER;
+
+// Disable D-Cache
+
+	SCB->CCR &= ~(1<<16);
+
+// Number of sets - 1
+// Number of shift (2 - log(2) of the number of words in the cache line
+//                             0x0 = 4 words in the cache line
+//                             0x1 = 8 words in the cache line
+// Number of ways
+
+	ccsidr        = SCB->CCSIDR;
+	numSets       = ((ccsidr & (0x7FFF<<13))>>13);
+	sShift        = (ccsidr & 7) + 4;
+	associativity = ((ccsidr & (0x3FF<<3))>>3);
+	wShift        = (_clz(associativity) & 0x1F);
+
+	DATA_SYNC_BARRIER;
+
+// Clear & invalidate D-Cache
+
+	do {                                   
+		tmpAssociativity = associativity;
+		do {
+			sw = ((tmpAssociativity<<wShift) | (numSets<<sShift));
+			CLEAR_INVALIDATE_CACHE = sw;
+		} while (tmpAssociativity--);
+	} while (numSets--);
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+}
+
+/*
+ * \brief cache_D_Invalidate
+ *
+ * - Invalidate the data cache
+ *
+ */
+inline	void	cache_D_Invalidate(void) {
+	uint32_t	ccsidr, sShift, wShift, sw;
+	uint32_t	numSets, associativity, tmpAssociativity;
+
+// Level 1 data cache
+
+	SCB->CSSELR = (0<<1) | (0<<0);
+	DATA_SYNC_BARRIER;
+
+// Number of sets - 1
+// Number of shift (2 - log(2) of the number of words in the cache line
+//                             0x0 = 4 words in the cache line
+//                             0x1 = 8 words in the cache line
+// Number of ways
+
+	ccsidr        = SCB->CCSIDR;
+	numSets       = ((ccsidr & (0x7FFF<<13))>>13);
+	sShift        = (ccsidr & 7) + 4;
+	associativity = ((ccsidr & (0x3FF<<3))>>3);
+	wShift        = (_clz(associativity) & 0x1F);
+
+	DATA_SYNC_BARRIER;
+
+// Invalidate D-Cache
+
+	do {                                   
+		tmpAssociativity = associativity;
+		do {
+			sw = ((tmpAssociativity<<wShift) | (numSets<<sShift));
+			INVALIDATE_CACHE = sw;
+		} while (tmpAssociativity--);
+	} while (numSets--);
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+}
+
+/*
+ * \brief cache_D_Clean
+ *
+ * - Clean the data cache
+ *
+ */
+inline	void	cache_D_Clean(void) {
+	uint32_t	ccsidr, sShift, wShift, sw;
+	uint32_t	numSets, associativity, tmpAssociativity;
+
+// Level 1 data cache
+
+	SCB->CSSELR = (0<<1) | (0<<0);
+	DATA_SYNC_BARRIER;
+
+// Number of sets - 1
+// Number of shift (2 - log(2) of the number of words in the cache line
+//                             0x0 = 4 words in the cache line
+//                             0x1 = 8 words in the cache line
+// Number of ways
+
+	ccsidr        = SCB->CCSIDR;
+	numSets       = ((ccsidr & (0x7FFF<<13))>>13);
+	sShift        = (ccsidr & 7) + 4;
+	associativity = ((ccsidr & (0x3FF<<3))>>3);
+	wShift        = (_clz(associativity) & 0x1F);
+
+	DATA_SYNC_BARRIER;
+
+// Clean D-Cache
+
+	do {                                   
+		tmpAssociativity = associativity;
+		do {
+			sw = ((tmpAssociativity<<wShift) | (numSets<<sShift));
+			CLEAR_CACHE = sw;
+		} while (tmpAssociativity--);
+	} while (numSets--);
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+}
+
+/*
+ * \brief cache_I_Enable
+ *
+ * - Enable the instruction cache
+ *
+ */
+inline	void	cache_I_Enable(void) {
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+
+// Invalidate I-Cache
+// Enable I-Cache
+
+    SCB->ICIALLU = 0;
+    SCB->CCR |= (1<<17);
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+}
+
+/*
+ * \brief cache_I_Disable
+ *
+ * - Disable the instruction cache
+ *
+ */
+inline	void	cache_I_Disable(void) {
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+
+// Disable I-Cache
+// Invalidate I-Cache
+
+	SCB->CCR &= ~(1<<17);
+	SCB->ICIALLU = 0;
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+}
+
+/*
+ * \brief cache_I_Invalidate
+ *
+ * - Invalidate the instruction cache
+ *
+ */
+inline	void	cache_I_Invalidate(void) {
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+
+// Invalidate I-Cache
+
+    SCB->ICIALLU = 0;
+
+	DATA_SYNC_BARRIER;
+	INST_SYNC_BARRIER;
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief _clz
+ *
+ */
+inline	uint32_t _clz(uint32_t data) {
+	uint32_t	count = 0;
+	uint32_t	mask = 0x80000000;
+
+	 while ((data & mask) == 0) {
+		count++;
+		mask >>= 1;
+    }
+    return (count);
+  }
+

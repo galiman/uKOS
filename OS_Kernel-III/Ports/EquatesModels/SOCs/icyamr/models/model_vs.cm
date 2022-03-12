@@ -1,0 +1,486 @@
+/*
+; model_vs.
+; =========
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "vs" device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+#define	KTOPPI		0
+#define	KSTAY		1
+
+extern	volatile	uint16_t	vTimeException;
+static	volatile	int32_t		vStatus = KVSNOERR;
+static	volatile	bool_t		vBusy   = FALSE;
+static	volatile	bool_t		vIMSema = FALSE;
+static	volatile	uint8_t		vLogShift;
+static	volatile	uint8_t		vDac0;
+static	volatile	uint8_t		vDac4;
+static	volatile	uint8_t		vDac9;
+static	volatile	uint8_t		vVrefSteps;
+
+static	volatile	uint8_t		vImager;
+static	volatile	uint8_t		vPixMode;
+static	volatile	uint8_t		vVrefRange;
+static	volatile	uint16_t	vExposureTime;
+static	volatile	uint16_t	vDmaCtrl;
+static	volatile	uint32_t	vDstImage;
+static	volatile	uint32_t	vDestination;
+
+#if (defined(__WITHSEMA__))
+static	volatile	sema_t		*vSeHandleIM[1];
+
+LOC_CONST_STRG(aStrSemaphoreIM[]) =	KSEMAPHORE_VSIM;
+#endif
+
+// Prototypes
+// ==========
+
+extern	void	handle_vs_interruptionDma0(void);
+extern	void	handle_vs_interruptionVSInit(void);
+extern	void	handle_vs_interruptionVSExpo(void);
+extern	void	handle_vs_interruptionVSRamp(void);
+static	void	_setDMA(uint8_t width);
+static	void	_signal(void);
+
+/*
+ * \brief vs_init
+ *
+ * - Initialize the manager
+ *
+ */
+void	vs_init(void) {
+			uint8_t		i;
+			uint8_t		*vsRegister08;
+			uint16_t	*vsRegister16;
+	const	uint8_t		aTabOff08[23] = {
+							OCONFIG,	   OTEST,          OLOG_SHIFT,     OLOG_FREEZE,		// config,          test,          log_shift,     log_freeze
+							OLOG_DOWN_NUP, ODAC0,          ODAC1,		   ODAC2, 	 		// log_down_nup,    dac_0,         dac_1,         dac_2
+							ODAC3,		   ODAC4,          ODAC5,		   ODAC6, 	 		// dac_3,           dac_4,         dac_5,         dac_6
+							ODAC7,		   ODAC8,		   ODAC9,		   ODAC10,     		// dac_7,           dac_8,         dac_9,         dac_10
+							OVREF_INIT,	   OVREF_EXPOSURE, OVREF_LIN_NLOG, OVREF_STOP_RAMP,	// vref_init,       vref_exposure, vref_lin_nlog, vref_stop_ramp
+							OVREF_STEP,	   OSUM_START_ROW, OSUM_STOP_ROW					// vref_step,       sum_start_row, sum_stop_row
+						};
+
+	const	uint8_t		aTabOff16[4] = {
+							OLOG_START_VALUE,
+							OLOG_DELAY,
+							OEXPOSURE_TIME,
+							OEXPOSURE_WAIT
+						};
+
+	#if (defined(__VS_INVERSE__))
+	const	uint8_t		aTabDat08[23] = {
+							CK_18,   	0,   SHIFT6BITS, 0,
+							1,       	10,  255,        50,
+							255,        50,  50, 		 50,
+							50,         200, 100,	     50,
+							0,		    255, 0,	   	     0,
+							STEP33TCYC, 5,   20
+						};
+
+	const	uint16_t	aTabDat16[4] = {  1023, 0, 700, 0 };
+
+	#else
+	const	uint8_t		aTabDat08[23] = {
+							CK_18,   	0,   SHIFT6BITS, 0,
+							0,       	10,  255,        50,
+							255,        50,  50, 		 50,
+							50,      	200, 100,	   	 50,
+							0,		  	255, 0,	   	     0,
+							STEP33TCYC, 5,   20
+						};
+
+	const	uint16_t	aTabDat16[4] =  { 0, 0, 700, 0 };
+	#endif
+
+// Create the semaphore
+
+	#if (defined(__WITHSEMA__))
+	kern_createSyncSemaphore(aStrSemaphoreIM, &vSeHandleIM[0]);
+	#endif
+
+// Prepare the interruptions and the DMA
+
+	*RQCTRL_IRQ_VEC_0     = (uint32_t)(handle_vs_interruptionDma0);															
+	*RQCTRL_IRQ_VEC_14    = (uint32_t)(handle_vs_interruptionVSInit);															
+	*RQCTRL_IRQ_VEC_15    = (uint32_t)(handle_vs_interruptionVSExpo);															
+	*RQCTRL_IRQ_VEC_16    = (uint32_t)(handle_vs_interruptionVSRamp);															
+  	*RQCTRL_SOURCE_EN_W1S = (1<<BDMA) | (1<<BVSLOG_END_INIT) | (1<<BVSLOG_END_EXPOSURE) | (1<<BVSLOG_END_RAMP) | (1<<BPPI0_0);	
+	*RQCTRL_IRQ_CONFIG_0 |= (KINT_LEVEL_VISENS<<BPRIREQ00); 		 															
+	*RQCTRL_IRQ_CONFIG_1 |= (KINT_LEVEL_VISENS<<BPRIREQ16) | (KINT_LEVEL_VISENS<<BPRIREQ15) | (KINT_LEVEL_VISENS<<BPRIREQ14); 	
+	*RQCTRL_SOURCE_SEL   |= (1<<BPPI0_0);																						
+	*RQCTRL_DMA_CHANIX_0 |= (BPPI0_0<<DMACONFIG4);																				
+	*RQCTRL_DMA_EN       |= (1<<BRQWRCHANNEL0);																					
+	*RQCTRL_IRQ_LEVEL_EN  = KINT_SYS_LEVEL;																						
+	*DMA0_IRQCONFIG       = (1<<BSRCIRQBUFEN);																					
+
+// Prepare the PPI & the VS log
+
+	*PPI_CTRL     = (1<<BPPI_DIR) | (1<<BPPI_E);								
+	*PPI_CTRL     = (1<<BPPI_DIR) | (1<<BPPI_PORT_E) | (1<<BPPI_E);				
+	*PPI_IRQ0_E   = (1<<BIRQ_FIFO_NOT_FULL);									
+	*VSLOGCTRL_EN = (1<<BENVS);													
+
+// Initialize the VS log with a default values
+
+	for (i = 0; i < 23; i++) {
+		vsRegister08 = (uint8_t *)((uint32_t)VSLOG + (uint32_t)aTabOff08[i]);	
+		*vsRegister08 = aTabDat08[i];											
+	}
+
+	for (i = 0; i < 4; i++) {
+		vsRegister16 = (uint16_t *)((uint32_t)VSLOG + (uint32_t)aTabOff16[i]);	
+		*vsRegister16 = aTabDat16[i];											
+	}
+}
+
+/*
+ * \brief vs_configure
+ *
+ * - Configure the manager
+ *
+ */
+int32_t	vs_configure(const cnfVs_t *configure) {
+	uint8_t		i, j;
+
+// Configurations
+
+	struct	cnf {
+		uint32_t	oDstImage;							// Destination of the image
+		uint32_t	oDestination;						// Destination of the image
+	};
+
+	const struct cnf cnf[3] = {
+		{ (uint32_t)PPI_DATA_8B, KTOPPI    },			// To the PPI 8-bits
+		{ (uint32_t)PPI_DATA,    KTOPPI    },			// To the PPI 12-bits (carrying 10-bit feature)
+		{ (uint32_t)NULL,        KSTAY     }			// No transfer
+	};
+
+// Functionalities
+
+	struct	mode {
+		uint8_t		oMode_Oricon;						// MODE_ORICON register
+		uint8_t		oD8_N10;							// D8_N10 register
+		uint8_t		oD_Lsb;								// D_LSB register
+	};
+
+	const struct mode mode[5] = {
+		{ SLUMSUM,            S8WORDS8,  S8WORDS8MSB },	// Mode luminance 8-bits MSB
+		{ SLUMSUM,            S8WORDS8,  S8WORDS8LSB },	// Mode luminance 8-bits LSB
+		{ SCONTRASTS,         S8WORDS8,  S8WORDS8MSB },	// Mode contrast
+		{ SORIEBT3_CONTRAST5, S8WORDS8,  S8WORDS8MSB },	// Mode oricon
+		{ SLUMSUM,            S4WORDS16, S8WORDS8MSB }	// Mode luminance 10-bits MSB
+	};
+
+// Compute the table indexes
+
+	switch (configure->oPixMode) {
+		case KLUM8MSB:  { j = 0; break; }				// Mode luminance 8-bits MSB
+		case KLUM8LSB:  { j = 1; break; }				// Mode luminance 8-bits LSB
+		case KCONTRAST: { j = 2; break; }				// Mode contrast
+		case KORICON:   { j = 3; break; }				// Mode oricon
+		case KLUM10:    { j = 4; break; }				// Mode luminance 10-bits MSB
+		default: 		{ j = 0; break; }				// Mode luminance 8-bits MSB
+	}
+
+	switch (configure->oAcqPage) {
+		case KPPI:    { if (j == 4) { i = 1; break; }	// To the PPI for 10-bit LUM feature
+					    else 		{ i = 0; break; } }	// To the PPI for all other features (8-bits)
+		case KNOXFER: { i = 2; break;				  }	// No transfer
+		default:      { i = 2; break;				  }	// No transfer
+	}
+
+// Configure the manager
+
+	INTERRUPTION_OFF;
+	vIMSema = ((configure->oKernSync & (1<<BIMSEMA)) != 0) ? TRUE : FALSE;
+
+	vDstImage     = cnf[i].oDstImage;					
+	vDestination  = cnf[i].oDestination;				
+	vImager       = configure->oImager;					
+	vPixMode      = configure->oPixMode;					
+	vExposureTime = configure->oExposureTime;			
+	vVrefRange    = configure->oVrefRange;				
+	vLogShift     = configure->oLogShift;				
+	vDac0         = configure->oDac0;					
+	vDac4         = configure->oDac4;					
+	vDac9         = configure->oDac9;					
+	vVrefSteps    = configure->oVrefSteps;				
+
+	*VSLOGCTRL_MODE_ORICON = mode[j].oMode_Oricon;		
+	*VSLOGCTRL_D8_N10 	   = mode[j].oD8_N10;			
+	*VSLOGCTRL_D_LSB 	   = mode[j].oD_Lsb;			
+	RETURN_INT_RESTORED(KVSNOERR);
+}
+
+/*
+ * \brief vs_acquisition
+ *
+ * - Acquisition of an image on the device
+ *
+ */
+int32_t	vs_acquisition(void) {
+	uint8_t		i, j;
+
+// Functionalities
+
+	struct	mode {
+		uint8_t		oMode_Oricon;		// MODE_ORICON register
+		uint8_t		oD8_N10;			// D8_N10 register
+		uint8_t		oD_Lsb;				// D_LSB register
+		uint8_t		oLog_Freeze;		// LOG_FREEZE register
+		uint8_t		oVRef_Lin_NLog;		// VREF_LIN_NLOG register
+		uint8_t 	oWidth;				// Size of the DMA transfer
+	};
+
+	const struct mode mode[3][5] = {
+		{
+		{ SLUMSUM,            S8WORDS8,  S8WORDS8MSB, 0, 0, 8  },	// Log, Mode luminance 8-bits MSB
+		{ SLUMSUM,            S8WORDS8,  S8WORDS8LSB, 0, 0, 8  },	// Log, Mode luminance 8-bits LSB
+		{ SCONTRASTS,         S8WORDS8,  S8WORDS8MSB, 0, 0, 8  },	// Log, Mode contrast
+		{ SORIEBT3_CONTRAST5, S8WORDS8,  S8WORDS8MSB, 0, 0, 8  },	// Log, Mode oricon
+		{ SLUMSUM,            S4WORDS16, S8WORDS8MSB, 0, 0, 16 }	// Log, Mode luminance 10-bits MSB
+		},
+		{
+		{ SLUMSUM,            S8WORDS8,  S8WORDS8MSB, 1, 1, 8  },	// Lin, Mode luminance 8-bits MSB
+		{ SLUMSUM,            S8WORDS8,  S8WORDS8LSB, 1, 1, 8  },	// Lin, Mode luminance 8-bits LSB
+		{ SCONTRASTS,         S8WORDS8,  S8WORDS8MSB, 1, 1, 8  },	// Lin, Mode contrast
+		{ SORIEBT3_CONTRAST5, S8WORDS8,  S8WORDS8MSB, 1, 1, 8  },	// Lin, Mode oricon
+		{ SLUMSUM,            S4WORDS16, S8WORDS8MSB, 1, 1, 16 }	// Lin, Mode luminance 10-bits MSB
+		},
+		{
+		{ SLUMSUM,            S8WORDS8,  S8WORDS8MSB, 0, 1, 8  },	// LinLog, Mode luminance 8-bits MSB
+		{ SLUMSUM,            S8WORDS8,  S8WORDS8LSB, 0, 1, 8  },	// LinLog, Mode luminance 8-bits LSB
+		{ SCONTRASTS,         S8WORDS8,  S8WORDS8MSB, 0, 1, 8  },	// LinLog, Mode contrast
+		{ SORIEBT3_CONTRAST5, S8WORDS8,  S8WORDS8MSB, 0, 1, 8  },	// LinLog, Mode oricon
+		{ SLUMSUM,            S4WORDS16, S8WORDS8MSB, 0, 1, 16 }	// LinLog, Mode luminance 10-bits MSB
+		}
+	};
+
+	if (vBusy) return (KVSTROPR);				
+
+	vBusy   = TRUE;								
+	vStatus = KVSTROPR;						
+
+// Compute the table indexes
+
+	switch (vImager) {
+		case KLOG:    { i = 0; break; }				// Imager in a Log mode
+		case KLIN:    { i = 1; break; }				// Imager in a Lin mode
+		case KLINLOG: { i = 2; break; }				// Imager in a LinLog mode
+		default:      { i = 0; break; }				// Imager in a Log mode
+	}
+
+	switch (vPixMode) {
+		case KLUM8MSB:  { j = 0; break;	     }		// Mode luminance 8-bits MSB
+		case KLUM8LSB:  { j = 1; break;	     }		// Mode luminance 8-bits LSB
+		case KCONTRAST: { j = 2; break;	     }		// Mode contrast
+		case KORICON:   { j = 3; break;	     }		// Mode oricon
+		case KLUM10:    { j = 4; break;	     }		// Mode luminance 10-bits MSB
+		default: 		{ return (KVSCMNSU); }		//
+	}
+
+// Launch the acquisition
+
+	_setDMA(mode[i][j].oWidth);								
+
+	*VSLOGCTRL_LOG_SHIFT      = vLogShift;					
+	*VSLOGCTRL_DAC0           = vDac0;						
+	*VSLOGCTRL_DAC4           = vDac4;						
+	*VSLOGCTRL_DAC9           = vDac9;						
+	*VSLOGCTRL_VREF_STEP      = vVrefSteps;					
+	*VSLOGCTRL_EXPOSURE_TIME  = vExposureTime;				
+	*VSLOGCTRL_DAC8           = vVrefRange;					
+	*VSLOGCTRL_LOG_FREEZE     = mode[i][j].oLog_Freeze;		
+	*VSLOGCTRL_VREF_LIN_NLOG  = mode[i][j].oVRef_Lin_NLog;	
+	*VSLOGCTRL_MODE_ORICON    = mode[i][j].oMode_Oricon;	
+	*VSLOGCTRL_D8_N10 	      = mode[i][j].oD8_N10;			
+	*VSLOGCTRL_D_LSB 	      = mode[i][j].oD_Lsb;			
+	*VSLOGCTRL_START_SEQUENCE = (1<<BSTART_INIT);			
+	return (KVSNOERR);									
+}
+
+/*
+ * \brief vs_getImage
+ *
+ * - Get the image pointer
+ *
+ */
+int32_t	vs_getImage(uint8_t page, void **image) {
+
+	switch (page) {
+		default:
+		case KPPI:    { *image = (void *)VSLOG_BASE_ADDRESS; return (KVSNOERR); }
+		case KNOXFER: { *image = (void *)VSLOG_BASE_ADDRESS; return (KVSNOERR); }
+	}
+	return (KVSPGNOE);
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief _setDMA
+ *
+ * - Prepare the DMA for a 8 16-bits transfer
+ *
+ */
+static	void	_setDMA(uint8_t width) {
+	uint8_t 	i, j;
+
+// Dma transfers for 8 16-bits
+
+	#define	KDMACTRLPPI_8	((1<<BALLOWRW) | SRCSIZE_64 | DSTSIZE_8  | (1<<BMEMSRC) | (1<<BMODESRC2D) | (1<<BMODEDST2D) | (1<<BEN))
+	#define	KDMACTRLPPI_16	((1<<BALLOWRW) | SRCSIZE_64 | DSTSIZE_16 | (1<<BMEMSRC) | (1<<BMODESRC2D) | (1<<BMODEDST2D) | (1<<BEN))
+
+	struct	dma {
+		uint16_t	oSrc_X_Count;		// SRC X count
+		uint16_t	oSrc_Y_Count;		// SRC Y count
+		uint32_t	oSrc_X_Stride;		// SRC X stride
+		uint32_t	oSrc_Y_Stride;		// SRC Y stride
+		uint16_t	oDst_X_Count;		// DST X count
+		uint16_t	oDst_Y_Count;		// DST Y count
+		uint32_t	oDst_X_Stride;		// DST X stride
+		uint32_t	oDst_Y_Stride;		// DST Y stride
+		uint16_t	oDmaCtrl;			// DMA control
+	};
+
+	const struct dma dma0[1][2] = {
+		{
+		{ KNBCOLSQVGA/8,   KNBROWSQVGA, 8, 200, KNBCOLSQVGA, KNBROWSQVGA, 0, 0, KDMACTRLPPI_8    },	// DMA, to the PPI, 8-bits
+		{ KNBCOLSQVGA*2/8, KNBROWSQVGA, 8, 392, KNBCOLSQVGA, KNBROWSQVGA, 0, 0, KDMACTRLPPI_16   }	// DMA, to the PPI, 16-bits
+		}
+	};
+
+// Compute the table indexes
+
+	switch (vDestination) {
+		case KTOPPI: { i = 0; break; }	// To the PPI
+		case KSTAY:  { return;	     }	// No transfer
+		default:     { return;	     }	//
+	}
+
+	switch (width) {
+		case 8:  { j = 0; break; }		// 8-bits by pixel
+		case 16: { j = 1; break; }		// 10-bits by pixel
+		default: { j = 0; break; }		// 8-bits by pixel
+	}
+
+// Start the DMA transfer
+
+	*DMA0_IRQCONFIG      = (1<<BSRCIRQBUFEN);			
+	*DMA0_SRC_START_ADDR = VSLOG_BASE_ADDRESS;			
+	*DMA0_DST_START_ADDR = vDstImage;					
+	*DMA0_SRC_X_COUNT    = dma0[i][j].oSrc_X_Count;		
+	*DMA0_SRC_Y_COUNT    = dma0[i][j].oSrc_Y_Count;		
+	*DMA0_SRC_X_STRIDE   = dma0[i][j].oSrc_X_Stride;	
+	*DMA0_SRC_Y_STRIDE   = dma0[i][j].oSrc_Y_Stride;	
+	*DMA0_DST_X_COUNT    = dma0[i][j].oDst_X_Count;		
+	*DMA0_DST_Y_COUNT    = dma0[i][j].oDst_Y_Count;		
+	*DMA0_DST_X_STRIDE   = dma0[i][j].oDst_X_Stride;	
+	*DMA0_DST_Y_STRIDE   = dma0[i][j].oDst_Y_Stride;	
+	vDmaCtrl        	 = dma0[i][j].oDmaCtrl;			
+}
+
+/*
+ * \brief vs_interruptionXYZ
+ *
+ * - Interruption routines
+ * - The init phase launches the expo one
+ * - The expo phase launches the ramp one
+ * - The ramp phase launches the read and the DMA transfer
+ *
+ */
+void	vs_interruptionVSInit(void) {
+	uint8_t		i;
+
+ 	TIC_EXCEPTION_TIME;
+	*VSLOGCTRL_IRQ = (1<<BEND_OF_INIT);					
+    for (i = 0; i < 150; i++) {
+    	__asm__ volatile (" nop ");
+    } 	
+	*VSLOGCTRL_START_SEQUENCE = (1<<BSTART_EXPO);		
+	TAC_EXCEPTION_TIME;
+}
+
+void	vs_interruptionVSExpo(void) {
+
+ 	TIC_EXCEPTION_TIME;
+
+	#if (defined(__VS_SCOTCH__))
+	*VSLOGCTRL_DAC8      = vVrefRange - 15;				
+	*VSLOGCTRL_VREF_STEP = 7;							
+	#endif
+
+	*VSLOGCTRL_IRQ            = (1<<BEND_OF_EXPO);		
+	*VSLOGCTRL_START_SEQUENCE = (1<<BSTART_RAMP);		
+	TAC_EXCEPTION_TIME;
+}
+
+void	vs_interruptionVSRamp(void) {
+
+ 	TIC_EXCEPTION_TIME;
+	*VSLOGCTRL_IRQ            = (1<<BEND_OF_RAMP);		
+	*VSLOGCTRL_START_SEQUENCE = (1<<BSTART_READ);		
+
+	if (vDestination != KSTAY) {
+		*DMA0_CTRL = vDmaCtrl;
+	}
+	else {
+		_signal();
+	}				
+	TAC_EXCEPTION_TIME;
+}
+
+void	vs_interruptionDma0(void) {
+
+ 	TIC_EXCEPTION_TIME;
+	*DMA0_STATUS = (1<<BSRCIRQBUFF);					
+	_signal();											
+	TAC_EXCEPTION_TIME;
+}
+
+static	void	_signal(void) {
+
+	#if (defined(__WITHSEMA__) && defined(__VS_SEMA_IM__))
+	if (vIMSema) { kern_signalSemaphore(vSeHandleIM[0]); } 
+	#endif
+
+	vStatus = KVSNOERR;
+	vBusy = FALSE;
+}
+

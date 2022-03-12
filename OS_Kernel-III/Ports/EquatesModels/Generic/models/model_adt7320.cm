@@ -1,0 +1,122 @@
+/*
+; model_adt7320.
+; ==============
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "adt7320" device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+#include 	<ADT7320/ADT7320.h>
+
+/*
+ * \brief adt7320_init
+ *
+ * - Initialize some specific parts
+ *
+ */
+void	adt7320_init(void) {
+
+	cb_control(KINIT);
+
+	cb_control(KRESERVE);
+	cb_control(KSELECT);
+	cb_writeReadSPI(0xFF);
+	cb_writeReadSPI(0xFF);
+	cb_writeReadSPI(0xFF);
+	cb_writeReadSPI(0xFF);
+	cb_control(KDESELECT);
+	kern_suspendProcess(1);
+
+// Initialize the ADT7320
+
+	cb_control(KSELECT);
+	cb_writeReadSPI(REGCONFIG | KWRITE);
+	cb_writeReadSPI(0x90);
+	cb_control(KDESELECT);
+	cb_control(KRELEASE);
+	kern_suspendProcess(1000);
+}
+
+/*
+ * \brief adt7320_getTemperature
+ *
+ * - Get the temperature
+ *
+ */
+int32_t	adt7320_getTemperature(float64_t *temperature) {
+	uint8_t		msb, lsb;
+	int16_t		value;
+
+	cb_control(KRESERVE);
+	cb_control(KSELECT);
+	cb_writeReadSPI(REGTEMPER | KREAD);
+	msb = cb_writeReadSPI(0xFF);
+	lsb = cb_writeReadSPI(0xFF);
+
+	value = (int16_t)((msb<<8) | lsb);
+
+// Scale the result
+
+	*temperature = 0.0078 * (float64_t)value;
+	cb_control(KDESELECT);
+	cb_control(KRELEASE);
+	return (KADT7320NOERR);
+}
+
+/*
+ * \brief adt7320_setTemperature
+ *
+ * - Set the temperature
+ *
+ */
+int32_t	adt7320_setTemperature(float64_t temperature) {
+	uint8_t		msb, lsb;
+	uint16_t	value;
+
+	cb_control(KRESERVE);
+	value = (uint16_t)(temperature / 0.0078);
+	msb = (uint8_t)(value>>8);
+	lsb = (uint8_t)(value);
+
+	cb_control(KSELECT);
+	cb_writeReadSPI(REGTHISET | KWRITE);
+	cb_writeReadSPI(msb);
+	cb_writeReadSPI(lsb);
+	cb_control(KDESELECT);
+	cb_control(KRELEASE);
+	return (KADT7320NOERR);
+}
+

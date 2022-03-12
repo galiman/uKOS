@@ -1,0 +1,139 @@
+/*
+; model_copy.
+; ===========
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2016-08-09
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Fast copy of memory blocs.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+extern				void		(*vExce_indIntVectors[KNBINTERRUPTIONS])(void);
+extern	volatile	uint16_t	vTimeException;
+static	volatile	bool_t		vBlocTransfered;
+
+// Prototypes
+// ==========
+
+static	void	aDMA2_Stream2_IRQHandler(void);
+
+/*
+ * \brief copy_fastCopy
+ *
+ * - Fast copy
+ *
+ */
+int32_t	copy_fastCopy(const void *source, void *destination, uint32_t nbElements, uint8_t mode) {
+
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;
+
+	vExce_indIntVectors[DMA2_Stream2_IRQn] 	= aDMA2_Stream2_IRQHandler;
+	NVIC->IP[DMA2_Stream2_IRQn]				= (KINT_LEVEL_PERIPH<<4);
+	NVIC->ISER[1]						   |= (1<<(DMA2_Stream2_IRQn & 0x1F));
+
+	DMA2_Stream2->CR   = 0x00000000;
+	DMA2_Stream2->PAR  = (uint32_t)source;
+	DMA2_Stream2->M0AR = (uint32_t)destination;
+	DMA2_Stream2->NDTR = nbElements;
+	DMA2_Stream2->FCR  = DMA_SxFCR_DMDIS
+					   | DMA_SxFCR_FTH_0;
+
+	DMA2_Stream2->CR = DMA_SxCR_CHSEL_1
+					 | DMA_SxCR_PL_1
+					 | DMA_SxCR_PL_0
+					 | DMA_SxCR_MINC
+					 | DMA_SxCR_PINC
+					 | DMA_SxCR_DIR_1
+					 | DMA_SxCR_TCIE;
+
+	switch (mode) {
+		case K8BITS: {
+			break;
+		}
+		case K16BITS: {
+			DMA2_Stream2->CR |= DMA_SxCR_MSIZE_0
+					 		 |  DMA_SxCR_PSIZE_0;
+			break;
+		}
+		case K32BITS: {
+			DMA2_Stream2->CR |= DMA_SxCR_MSIZE_1
+					 		 |  DMA_SxCR_PSIZE_1;
+			break;
+		}
+		default: {
+			break;
+		}
+	}
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF2
+				| DMA_LIFCR_CHTIF2
+				| DMA_LIFCR_CTEIF2
+				| DMA_LIFCR_CDMEIF2
+				| DMA_LIFCR_CFEIF2;
+
+// Launch the transfer
+// ... and Waiting for the completion
+
+	vBlocTransfered   = FALSE;
+	DMA2_Stream2->CR |= DMA_SxCR_EN;
+
+	while (!vBlocTransfered) {
+	
+	// Waiting for an interruption
+
+			__asm__ volatile (
+			"wfi			\n"		
+			"dmb			\n"
+			"dsb			\n"
+			"isb			\n"
+			);
+
+	};
+	return (KCOPYNOERR);
+}
+
+/*
+ * \brief aDMA2_Stream2_IRQHandler
+ *
+ * - DMA interruption
+ *
+ */
+static	void	aDMA2_Stream2_IRQHandler(void) {
+
+	DMA2->LIFCR = DMA_LIFCR_CTCIF2;
+
+	cache_D_Clean();
+	vBlocTransfered = TRUE;
+}
+

@@ -1,0 +1,388 @@
+/*
+; model_bt121.
+; ============
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "bt121" device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+static	volatile	bool_t		vRXSema        = FALSE;
+static	volatile	bool_t		vTXSema        = FALSE;
+static	volatile	bool_t		vAcknowledge   = FALSE;
+static	volatile	bool_t		vHighSpeedRead = FALSE;
+
+static	volatile	uint8_t		vSndBuffer[KBT121LNSNDBUF];
+static	volatile	uint8_t		vRecBuffer[KBT121LNRECBUF];
+static	volatile	uint8_t		*vRRecBuffer;
+static	volatile	uint8_t		*vWRecBuffer;
+static	volatile	uint8_t		*vRSndBuffer;
+static	volatile	uint8_t		*vWSndBuffer;
+static	volatile	int32_t		vStatus = KBT121NOERR;
+
+#if (defined(__WITHSEMA__))
+static	volatile	sema_t		*vSeHandleRX[1];
+static	volatile	sema_t		*vSeHandleTX[1];
+
+LOC_CONST_STRG(aStrSemaphoreRX[]) =	KSEMAPHORE_BT121RX;
+LOC_CONST_STRG(aStrSemaphoreTX[]) =	KSEMAPHORE_BT121TX;
+#endif
+
+LOC_CONST_STRG(aStrIden[])        = "Process_BES";
+LOC_CONST_STRG(aStrText[])        = "Process BES (Bluetooth Event Server)      (c) EFr-2017";
+
+#define	KEVENT_SYSTEM_BOOT						0x00A00100
+#define	KEVENT_SYSTEM_SET_LOCAL_NAME			0x00200107
+#define	KEVENT_ENDPOINT_STATUS					0x00A00B02
+#define	KEVENT_SYSTEM_INITIALIZED				0x00A00101
+#define	KEVENT_ENDPOINT_DATA					0x00A00B01
+#define	KEVENT_ENDPOINT_CLOSING					0x00A00B03
+#define	KEVENT_ENDPOINT_SEND					0x00200B00
+#define	KEVENT_ENDPOINT_SET_FLAGS				0x00200B03
+#define	KEVENT_BT_CONNECTION_OPENED				0x00A00700
+#define	KEVENT_BT_CONNECTION_CLOSED				0x00A00701
+#define	KEVENT_BT_RFCOMM_OPENED					0x00A00400
+#define	KEVENT_BT_RFCOMM_START_SERVER			0x00200401
+#define	KEVENT_BT_GAP_SET_MODE					0x00200203
+#define	KEVENT_LE_GAP_SET_MODE					0x00200301
+#define	KEVENT_SM_BONDED						0x00A00F03
+#define	KEVENT_SM_CONFIGURE						0x00200F01
+#define	KEVENT_SM_SET_BONDABLE_MODE				0x00200F00
+#define	KEVENT_SM_READ_BONDING					0x00200F05
+#define	KEVENT_SM_PASSKEY_DISPLAY				0x00A00F00
+#define	KEVENT_HARDWARE_SET_UART_CONFIGURATION	0x00200C08
+
+#define	KORDER_SYSTEM_SET_LOCAL_NAME			0x20000107
+#define	KORDER_BT_RFCOMM_START_SERVER			0x20020401
+#define	KORDER_BT_GAP_SET_MODE					0x20030203
+#define	KORDER_LE_GAP_SET_MODE					0x20020301
+#define	KORDER_SM_CONFIGURE						0x20020F01
+#define	KORDER_SM_SET_BONDABLE_MODE				0x20010F00
+#define	KORDER_SM_READ_BONDING					0x20010F05
+#define	KORDER_ENDPOINT_SEND					0x20000B00
+
+// Prototypes
+// ==========
+
+static	void	aProcess(const void *argument);
+static	void	cb_configure(const cnfBt121_t *configure);
+static	void	cb_readPack(bt121Pack_t *pack, uint8_t *payLoad, bool_t highSpeedRead);
+static	void	cb_writePack(uint32_t order, uint8_t *payLoad, uint8_t lnOrder);
+
+/*
+ * \brief bt121_init
+ *
+ * - Initialize the manager
+ *
+ */
+void	bt121_init(void) {
+	volatile	proc_t 		*process;
+
+	cb_init();
+
+	#if (defined(__WITHSEMA__))
+	kern_createSyncSemaphore(aStrSemaphoreRX, &vSeHandleRX[0]);
+	kern_createSyncSemaphore(aStrSemaphoreTX, &vSeHandleTX[0]);
+	#endif
+
+// Initialize the circular buffers (snd) and (rec)
+// Launch the Bluetooth event server
+
+	vRSndBuffer = vWSndBuffer = vSndBuffer;
+	vRRecBuffer = vWRecBuffer = vRecBuffer;
+
+	PROC_SUPV(0, vSpecification_0, aStrText, KSZSTACKMIN, aProcess, aStrIden, KDEF0, (KHIGHPRIORITY+1), 0, KPROCNORMAL);
+
+	if (kern_createProcess(&vSpecification_0, NULL, &process) != KKERNNOERR) { exit(EXIT_FAILURE); }
+}
+
+/*
+ * \brief bt121_configure
+ *
+ * - Configure the manager
+ *
+ */
+int32_t	bt121_configure(const cnfBt121_t *configure) {
+
+	cb_configure(configure);
+
+	vRXSema = ((configure->oKernSync & (1<<BRXSEMA)) != 0) ? TRUE : FALSE;
+	vTXSema = ((configure->oKernSync & (1<<BTXSEMA)) != 0) ? TRUE : FALSE;
+	return (KBT121NOERR);
+}
+
+/*
+ * \brief bt121_write
+ *
+ * - Write a buffer
+ *
+ */
+int32_t	bt121_write(const uint8_t *buffer, uint32_t size) {
+			uint32_t	i, newSize;
+			uint64_t	time[2];
+			bool_t		timeout = FALSE;
+	static	bool_t		terminate = FALSE, busy = FALSE;
+
+	if (busy)      { return (KBT121SEPRO); }
+	if (size == 0) { return (KBT121LNBU0); }
+
+	busy = TRUE;
+	while (!terminate) {
+		if (size > (KBT121LNSNDBUF-4-2)) { newSize = (KBT121LNSNDBUF-4-2); size -= (KBT121LNSNDBUF-4-2); }
+		else					         { newSize = size; terminate = TRUE; 							 }
+
+// Copy the input buffer into the endpoint
+
+		vSndBuffer[0] = 3;
+		vSndBuffer[1] = (uint8_t)newSize;
+		for (i = 0; i < newSize; i++) {
+			vSndBuffer[i+2] = buffer[i];
+		}
+
+		kern_getTiccount(&time[0]);
+		do {
+			kern_switchFast();
+			kern_getTiccount(&time[1]);
+			if ((time[1] - time[0]) >= 10000000) { 
+				iotx_printf(KSYST,"---> Timeout blt0 problem\n");
+				timeout = TRUE;
+			}
+		} while ((!vAcknowledge) && (!timeout));
+		
+		vHighSpeedRead = TRUE;
+		vAcknowledge   = FALSE;
+		cb_writePack(KORDER_ENDPOINT_SEND | ((newSize+2)<<16), (uint8_t *)&vSndBuffer[0], newSize+2);
+		vWSndBuffer = vSndBuffer + newSize;
+		vRSndBuffer = vSndBuffer;
+		buffer += newSize;
+	}
+	busy = FALSE;
+	terminate = FALSE;
+	return (KBT121NOERR);
+}
+
+/*
+ * \brief bt121_read
+ *
+ * - Read n x bytes
+ *
+ */
+int32_t	bt121_read(uint8_t *buffer, uint32_t *size) {
+	int32_t		status;
+	uint32_t	i;
+
+	INTERRUPTION_OFF;
+	status  = vStatus;
+	vStatus = KBT121NOERR;
+
+// Interruption problem: buffer full, Framing error, Overrun error, ..
+// In this case, we return 0-bytes read with the corresponding error.
+// The Error is then cancelled for the next time.
+
+	if (status != KBT121NOERR)			{ *size = 0; RETURN_INT_RESTORED(status); 	   }
+	if (*size == 0) 					{ *size = 0; RETURN_INT_RESTORED(KBT121NOERR); }
+	if (vRRecBuffer == vWRecBuffer)     { *size = 0; RETURN_INT_RESTORED(KBT121RBUEM); }
+
+	for (i = 0; i < *size; i++) {
+		if (vRRecBuffer == vWRecBuffer) { *size = i; RETURN_INT_RESTORED(KBT121NOERR); }
+
+		*buffer++ = *vRRecBuffer++;
+		if (vRRecBuffer == (vRecBuffer + KBT121LNRECBUF)) {
+			vRRecBuffer = vRecBuffer;
+		}
+	}
+	RETURN_INT_RESTORED(status);
+}
+
+/*
+ * \brief bt121_flush
+ *
+ * - Flush the bt121 manager
+ *
+ */
+int32_t	bt121_flush(void) {
+	volatile	sema_t	*semaphore;
+
+// Initialize the circular buffers (rec) and restart the associated semaphore
+
+	INTERRUPTION_OFF;
+	vRRecBuffer = vWRecBuffer = vRecBuffer;
+	kern_getSemaphoreById(KSEMAPHORE_BT121RX, &semaphore);
+	kern_restartSemaphore(semaphore);
+	RETURN_INT_RESTORED(KBT121NOERR);
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief aProcess
+ *
+ */
+static	void	aProcess(const void *argument) {
+	uint32_t	msgId;
+	bt121Pack_t bt121Pack;
+	uint8_t		i, order[4], payLoad[2+58];
+
+// Initialize the hardware
+
+	while (TRUE) {
+		cb_readPack(&bt121Pack, payLoad, vHighSpeedRead);
+
+// Skip the length:  0x00 Hilen Class Method
+
+		msgId = (uint32_t)(bt121Pack.oHilen<<16 | bt121Pack.oClass<<8 | bt121Pack.oMethod);
+		switch (msgId) {
+			case KEVENT_SYSTEM_INITIALIZED: {
+
+// Start the RFCOMM server for SPP
+// Make the device visible via both BT BR/EDR and LE
+
+				order[0] = 2; order[1] = 0;				  cb_writePack(KORDER_BT_RFCOMM_START_SERVER, (uint8_t *)&order[0], 2);
+	 
+				order[0] = 1; order[1] = 1; order[2] = 0; cb_writePack(KORDER_BT_GAP_SET_MODE,        (uint8_t *)&order[0], 3);
+				order[0] = 2; order[1] = 2;				  cb_writePack(KORDER_LE_GAP_SET_MODE,        (uint8_t *)&order[0], 2);
+	 
+				order[0] = 0; order[1] = 3;				  cb_writePack(KORDER_SM_CONFIGURE,           (uint8_t *)&order[0], 2);
+				order[0] = 1;							  cb_writePack(KORDER_SM_SET_BONDABLE_MODE,   (uint8_t *)&order[0], 1);
+				order[0] = 0;							  cb_writePack(KORDER_SM_READ_BONDING,        (uint8_t *)&order[0], 1);
+				break;
+			}
+
+// Trapped events
+
+			#if (defined(__VERBOSE__))
+			case KEVENT_SYSTEM_BOOT: 					 { iotx_printf(KSYST, "Event: system boot\n");						break; }
+			case KEVENT_SYSTEM_SET_LOCAL_NAME: 			 { iotx_printf(KSYST, "Event: set local name\n");					break; }
+			case KEVENT_LE_GAP_SET_MODE:				 { iotx_printf(KSYST, "Event: LE gap set mode\n");					break; }
+			case KEVENT_BT_GAP_SET_MODE:				 { iotx_printf(KSYST, "Event: BT gap set mode\n");					break; }
+			case KEVENT_BT_RFCOMM_START_SERVER:			 { iotx_printf(KSYST, "Event: BT RFCOMM start server\n");			break; }
+			case KEVENT_BT_CONNECTION_OPENED:			 { iotx_printf(KSYST, "Event: BT connection opened\n");				break; }
+			case KEVENT_BT_CONNECTION_CLOSED:			 { iotx_printf(KSYST, "Event: BT connection closed\n");				break; }
+			case KEVENT_ENDPOINT_CLOSING:				 { iotx_printf(KSYST, "Event: Endpoint closing\n");					break; }
+			case KEVENT_ENDPOINT_SET_FLAGS:				 { iotx_printf(KSYST, "Event: Enpoint set flag\n");					break; }
+			case KEVENT_SM_READ_BONDING:				 { iotx_printf(KSYST, "Event: SM read bonding\n");					break; }
+			case KEVENT_SM_PASSKEY_DISPLAY:				 { iotx_printf(KSYST, "Event: SM passkey display\n");				break; }
+			case KEVENT_SM_CONFIGURE:					 { iotx_printf(KSYST, "Event: SM configure\n");						break; }
+			case KEVENT_SM_SET_BONDABLE_MODE:			 { iotx_printf(KSYST, "Event: SM set bondable mode\n");				break; }
+			case KEVENT_SM_BONDED:						 { iotx_printf(KSYST, "Event: SM bonded\n");						break; }
+			case KEVENT_HARDWARE_SET_UART_CONFIGURATION: { iotx_printf(KSYST, "Event: Hardware set uart configuration\n");	break; }
+
+			case KEVENT_ENDPOINT_STATUS: {
+				iotx_printf(KSYST, "Event: Endpoint status %X %X %X %X\n", payLoad[0], (payLoad[4]<<24 | payLoad[3]<<16 | payLoad[2]<<8 | payLoad[1]), payLoad[5], payLoad[6]);
+				break;
+			}
+
+			#else
+			case KEVENT_SYSTEM_BOOT: 					 { break; }
+			case KEVENT_SYSTEM_SET_LOCAL_NAME: 			 { break; }
+			case KEVENT_LE_GAP_SET_MODE:				 { break; }
+			case KEVENT_BT_GAP_SET_MODE:				 { break; }
+			case KEVENT_BT_RFCOMM_START_SERVER: 		 { break; }
+			case KEVENT_BT_CONNECTION_OPENED:			 { break; }
+			case KEVENT_BT_CONNECTION_CLOSED:			 { break; }
+			case KEVENT_ENDPOINT_CLOSING:				 { break; }
+			case KEVENT_ENDPOINT_SET_FLAGS:				 { break; }
+			case KEVENT_ENDPOINT_STATUS:				 { break; }
+			case KEVENT_SM_READ_BONDING:				 { break; }
+			case KEVENT_SM_PASSKEY_DISPLAY:				 { break; }
+			case KEVENT_SM_CONFIGURE:					 { break; }
+			case KEVENT_SM_SET_BONDABLE_MODE:			 { break; }
+			case KEVENT_SM_BONDED:						 { break; }
+			case KEVENT_HARDWARE_SET_UART_CONFIGURATION: { break; }
+			#endif
+
+			case KEVENT_BT_RFCOMM_OPENED: {
+				vAcknowledge = TRUE;
+				iotx_printf(KSYST, "Event: BT121 Communication opened\n");
+				break;
+			}
+
+// Read the end-point and fill the circular buffer
+
+			case KEVENT_ENDPOINT_DATA: {
+				vHighSpeedRead = FALSE;
+
+				INTERRUPTION_OFF;
+				for (i = 0; i < payLoad[1]; i++) {
+
+					*vWRecBuffer++ = payLoad[i+2];
+					if (vWRecBuffer == vRRecBuffer) {
+						vStatus = KBT121RBFUL;
+					}
+					if (vWRecBuffer == (vRecBuffer + KBT121LNRECBUF)) {
+						vWRecBuffer = vRecBuffer;
+					}
+
+					#if (defined(__WITHSEMA__) && defined(__BT121_SEMA_RX__))
+					if (vRXSema) { kern_signalSemaphore(vSeHandleRX[0]); }
+					#endif
+
+				}
+				INTERRUPTION_RESTORED;
+
+				break;
+			}
+
+// Endpoint written
+
+			case KEVENT_ENDPOINT_SEND: {
+				vAcknowledge = TRUE;
+
+				#if (defined(__WITHSEMA__) && defined(__BT121_SEMA_TX__))
+				if (vTXSema) { kern_signalSemaphore(vSeHandleTX[0]); }
+				#endif
+				
+				break;
+			}
+
+// Un-decoded events
+
+			default: {
+
+				#if (defined(__VERBOSE__))
+				iotx_printf(KSYST, "<---- Event not decoded yet\n");
+				iotx_printf(KSYST, "Hilen  %0X\n", bt121Pack.oHilen);
+				iotx_printf(KSYST, "LoLen  %0X\n", bt121Pack.oLoLen);
+				iotx_printf(KSYST, "Class  %0X\n", bt121Pack.oClass);
+				iotx_printf(KSYST, "Method %0X\n", bt121Pack.oMethod);
+				#endif
+
+				break;
+			}
+		}
+	}
+}
+

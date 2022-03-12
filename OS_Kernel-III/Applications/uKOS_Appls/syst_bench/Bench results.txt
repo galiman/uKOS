@@ -1,0 +1,255 @@
+
+M4 M7 benches
+=============
+
+Platforms:
+M4:		Baphomet_429 180-MHz	gcc-6.1.0	Os
+M7:		Baphomet_746 216-MHz	gcc-5.4.1	Os
+
+Clock ratio:	216/180 = 1.2
+
+Sysquake library SQE (gain: 192/115 = 1.66)
+-------------------------------------------
+
+Cortex M4
+
+lu: 191
+max: 102
+fibonacci: 25
+uint8: 130
+strfind: 154
+list: 62
+funcall: 139
+Scores (PowerBook G4 at 1.33 GHz = 1330 MHz):
+        lu: 190.660 MHz
+       max: 102.168 MHz
+ fibonacci: 25.380 MHz
+     uint8: 129.890 MHz
+   strfind: 153.867 MHz
+      list: 62.095 MHz
+   funcall: 139.068 MHz
+   Average: 114.733 MHz
+                                    AVERAGE   lu  max fibo uint strf list func
+        MacPro Dual-Core Xeon 3 GHz:   5478 3829 7632 5311 5974 6469 3718 5411
+    Dell Dimension 2400 P4 3.06 GHz:   2749 2864 1330 2920 2984 3743 2510 2894
+   Apple Mac Mini Core Duo 1.66 GHz:   2516 2024 3185 2275 2465 3178 1852 2630
+     Apple PowerMac G5 Dual 2.5 GHz:   2411 2915 2633 2438 2239 2116 1835 2700
+MacPro Dual-Core Xeon 3 GHz Rosetta:   2039 2503 2630 1710 2578 2203  923 1725
+        Apple PowerBook G4 1.33 GHz:   1330 1330 1330 1330 1330 1330 1330 1330
+  Apple PB G4 1.33 GHz MATLAB 7.0.1:    773 1017 1953  458  341  986  340  319
+             Apple iBook G3 500 MHz:    497  531  619  286  604  481  455  507
+DEC Workstation 500au Alpha 500 MHz:    402  227  516  359  663  457  230  365
+Sun Blade 100 UltraSparcIIe 500 MHz:    367  194  400  488  414  400  326  350
+   Generic PC Pentium Win2K 300 MHz:    351  444  257  380  518  288  276  294
+       Dell Axim X30 PXA270 626 MHz:    143   55  140   31  381  111   59  226
+Apple PowerBook 3400 PPC603 200 MHz:    134  141  120  111  215  182   79   88
+               Baphomet_429 180 MHz:    115  191  102   25  130  154   62  139
+       CerfBoard 255 XScale 400 MHz:     84   11   25   42  234   92   63  125
+Kontron X-board<861> SC1200 266 MHz:     77   65   63   81   88  142   47   52
+Palm Zire 71 OMAP 144 MHz, emu M68k:      1.19 1.04 1.14 1.22 1.06 1.74 1.00 1.15
+  Handspring Visor MC68EZ328 16 MHz:      0.51 0.19 0.45 0.55 0.52 0.75 0.48 0.62
+            Atari 1040ST M68k 8 MHz:      0.39 0.06 0.32 0.28 0.71 0.62 0.20 0.57
+
+Cortex M7
+
+lu: 291
+max: 213
+fibonacci: 34
+uint8: 271
+strfind: 236
+list: 89
+funcall: 207
+Scores (PowerBook G4 at 1.33 GHz = 1330 MHz):
+        lu: 290.783 MHz
+       max: 213.427 MHz
+ fibonacci: 33.814 MHz
+     uint8: 270.970 MHz
+   strfind: 236.283 MHz
+      list: 89.173 MHz
+   funcall: 207.439 MHz
+   Average: 191.699 MHz
+                                    AVERAGE   lu  max fibo uint strf list func
+        MacPro Dual-Core Xeon 3 GHz:   5478 3829 7632 5311 5974 6469 3718 5411
+    Dell Dimension 2400 P4 3.06 GHz:   2749 2864 1330 2920 2984 3743 2510 2894
+   Apple Mac Mini Core Duo 1.66 GHz:   2516 2024 3185 2275 2465 3178 1852 2630
+     Apple PowerMac G5 Dual 2.5 GHz:   2411 2915 2633 2438 2239 2116 1835 2700
+MacPro Dual-Core Xeon 3 GHz Rosetta:   2039 2503 2630 1710 2578 2203  923 1725
+        Apple PowerBook G4 1.33 GHz:   1330 1330 1330 1330 1330 1330 1330 1330
+  Apple PB G4 1.33 GHz MATLAB 7.0.1:    773 1017 1953  458  341  986  340  319
+             Apple iBook G3 500 MHz:    497  531  619  286  604  481  455  507
+DEC Workstation 500au Alpha 500 MHz:    402  227  516  359  663  457  230  365
+Sun Blade 100 UltraSparcIIe 500 MHz:    367  194  400  488  414  400  326  350
+   Generic PC Pentium Win2K 300 MHz:    351  444  257  380  518  288  276  294
+               Baphomet_746 216 MHz:    192  291  213   34  271  236   89  207
+       Dell Axim X30 PXA270 626 MHz:    143   55  140   31  381  111   59  226
+Apple PowerBook 3400 PPC603 200 MHz:    134  141  120  111  215  182   79   88
+       CerfBoard 255 XScale 400 MHz:     84   11   25   42  234   92   63  125
+Kontron X-board<861> SC1200 266 MHz:     77   65   63   81   88  142   47   52
+Palm Zire 71 OMAP 144 MHz, emu M68k:      1.19 1.04 1.14 1.22 1.06 1.74 1.00 1.15
+  Handspring Visor MC68EZ328 16 MHz:      0.51 0.19 0.45 0.55 0.52 0.75 0.48 0.62
+            Atari 1040ST M68k 8 MHz:      0.39 0.06 0.32 0.28 0.71 0.62 0.20 0.57
+
+Misc benches
+------------
+
+Bench 00:
+;						Ext Ram Execution				Int Flash Execution				gain
+;						cpu 429 (M4)	cpu 746 (M7)	cpu 429 (M4)	cpu 746 (M7)
+;			_fill		552				28				90				26				3.46
+;			_projX		831				46				142				44				3.22
+;			_projY		1129			46				142				43				3.22
+;			_histo		1225			316				314				123				2.55
+
+Bench 01:
+;						Ext Ram Execution				Int Flash Execution				gain
+;						cpu 429 (M4)	cpu 746 (M7)	cpu 429 (M4)	cpu 746 (M7)
+;			_fill		236202			9339			38980			9322			4.18
+;			_projX		617702			133772			297959			136009			2.19
+;			_projY		582815			80257			297878			79202			3.76
+;			_histo		490940			189230			98489			86059			1.14
+
+Bench 02:
+;						Ext Ram Execution				Int Flash Execution				gain
+;						cpu 429 (M4)	cpu 746 (M7)	cpu 429 (M4)	cpu 746 (M7)
+;			_minMax		1048			89				146				86				1.69
+
+Bench 03:
+;						Ext Ram Execution				Int Flash Execution				gain
+;						cpu 429 (M4)	cpu 746 (M7)	cpu 429 (M4)	cpu 746 (M7)
+;			_minMax		545358			113770			110666			96498			1.14
+
+Bench 04:
+;						Ext Ram Execution				Int Flash Execution				gain
+;						cpu 429 (M4)	cpu 746 (M7)	cpu 429 (M4)	cpu 746 (M7)
+;			_atan2		483				46				70				53				1.32
+
+Details of the misc benches
+---------------------------
+
+Execution in the external Memory
+
+M4
+Bench 00: Fill a small 2D array (50 x 50) elements in
+          the internal memory. Then, compute the
+          X-Y projections and the histogram.
+          Fill the array                               t = 552-us
+          X projection                                 t = 831-us
+          Y projection                                 t = 1129-us
+          Histogram                                    t = 1225-us
+
+Bench 01: Fill a small 2D array (1000 x 1000) elements
+          in the internal memory. Then, compute the
+          X-Y projections and the histogram.
+          Fill the array                               t = 236202-us
+          X projection                                 t = 617702-us
+          Y projection                                 t = 582815-us
+          Histogram                                    t = 490940-us
+
+Bench 02: Fill a small 1D array (1000) elements in
+          the internal memory with a random pattern.
+          Then, compute the min / max values.
+          Min / Max                                    t = 1048-us
+
+Bench 03: Fill a big 1D array (500000) elements in
+          the external memory with a random pattern.
+          Then, compute the min / max values.
+          Min / Max                                    t = 545358-us
+
+Bench 04: Compute the integer atan2 using the CORDIC
+          algorithm. The code is called 1000 times.
+          1000 x atan2(y, x)                           t = 483-us
+
+M7
+Bench 00: Fill a small 2D array (50 x 50) elements in
+          the internal memory. Then, compute the
+          X-Y projections and the histogram.
+          Fill the array                               t = 28-us
+          X projection                                 t = 46-us
+          Y projection                                 t = 46-us
+          Histogram                                    t = 316-us
+
+Bench 01: Fill a small 2D array (1000 x 1000) elements
+          in the internal memory. Then, compute the
+          X-Y projections and the histogram.
+          Fill the array                               t = 9339-us
+          X projection                                 t = 133772-us
+          Y projection                                 t = 80257-us
+          Histogram                                    t = 189230-us
+
+Bench 02: Fill a small 1D array (1000) elements in
+          the internal memory with a random pattern.
+          Then, compute the min / max values.
+          Min / Max                                    t = 89-us
+
+Bench 03: Fill a big 1D array (500000) elements in
+          the external memory with a random pattern.
+          Then, compute the min / max values.
+          Min / Max                                    t = 113770-us
+
+Bench 04: Compute the integer atan2 using the CORDIC
+          algorithm. The code is called 1000 times.
+          1000 x atan2(y, x)                           t = 46-us
+
+Execution in the Flash Memory
+
+M4
+Bench 00: Fill a small 2D array (50 x 50) elements in
+          the internal memory. Then, compute the
+          X-Y projections and the histogram.
+          Fill the array                               t = 90-us
+          X projection                                 t = 142-us
+          Y projection                                 t = 142-us
+          Histogram                                    t = 198-us
+
+Bench 01: Fill a small 2D array (1000 x 1000) elements
+          in the internal memory. Then, compute the
+          X-Y projections and the histogram.
+          Fill the array                               t = 38992-us
+          X projection                                 t = 297959-us
+          Y projection                                 t = 297878-us
+          Histogram                                    t = 98489-us
+
+Bench 02: Fill a small 1D array (1000) elements in
+          the internal memory with a random pattern.
+          Then, compute the min / max values.
+          Min / Max                                    t = 146-us
+
+Bench 03: Fill a big 1D array (500000) elements in
+          the external memory with a random pattern.
+          Then, compute the min / max values.
+          Min / Max                                    t = 110682-us
+
+Bench 04: Compute the integer atan2 using the CORDIC
+          algorithm. The code is called 1000 times.
+          1000 x atan2(y, x)                           t = 69-us
+
+M7
+Bench 00: Fill a small 2D array (50 x 50) elements in
+          the internal memory. Then, compute the
+          X-Y projections and the histogram.
+          Fill the array                               t = 26-us
+          X projection                                 t = 44-us
+          Y projection                                 t = 43-us
+          Histogram                                    t = 123-us
+
+Bench 01: Fill a small 2D array (1000 x 1000) elements
+          in the internal memory. Then, compute the
+          X-Y projections and the histogram.
+          Fill the array                               t = 9322-us
+          X projection                                 t = 136009-us
+          Y projection                                 t = 79202-us
+          Histogram                                    t = 86059-us
+
+Bench 02: Fill a small 1D array (1000) elements in
+          the internal memory with a random pattern.
+          Then, compute the min / max values.
+          Min / Max                                    t = 86-us
+
+Bench 03: Fill a big 1D array (500000) elements in
+          the external memory with a random pattern.
+          Then, compute the min / max values.
+          Min / Max                                    t = 96498-us
+
+Bench 04: Compute the integer atan2 using the CORDIC
+          algorithm. The code is called 1000 times.
+          1000 x atan2(y, x)                           t = 53-us

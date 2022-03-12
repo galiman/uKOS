@@ -1,0 +1,303 @@
+/*
+; model_uart.
+; ===========
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "uart" device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+extern	volatile	uint16_t	vTimeException;
+static	volatile	bool_t		vSending = FALSE;
+static	volatile	bool_t		vRXSema  = FALSE;
+static	volatile	bool_t		vTXSema  = FALSE;
+static	volatile	uint8_t		vSndBuffer[KUARTLNSNDBUF];
+static	volatile	uint8_t		vRecBuffer[KUARTLNRECBUF];
+static	volatile	uint8_t		*vRRecBuffer;
+static	volatile	uint8_t		*vWRecBuffer;
+static	volatile	uint8_t		*vRSndBuffer;
+static	volatile	uint8_t		*vWSndBuffer;
+static	volatile	int32_t		vStatus = KUARTNOERR;
+
+#if (defined(__WITHSEMA__))
+static	volatile	sema_t		*vSeHandleRX[1];
+static	volatile	sema_t		*vSeHandleTX[1];
+
+LOC_CONST_STRG(aStrSemaphoreRX[]) =	KSEMAPHORE_UARTRX;
+LOC_CONST_STRG(aStrSemaphoreTX[]) =	KSEMAPHORE_UARTTX;
+#endif
+
+// Prototypes
+// ==========
+
+extern	void	handle_uart_interruptionTX(void);
+extern	void	handle_uart_interruptionRX(void);
+
+/*
+ * \brief uart_init
+ *
+ * - Initialize the manager
+ *
+ */
+void	uart_init(void) {
+
+// Create the semaphores
+
+	#if (defined(__WITHSEMA__))
+	kern_createSyncSemaphore(aStrSemaphoreRX, &vSeHandleRX[0]);
+	kern_createSyncSemaphore(aStrSemaphoreTX, &vSeHandleTX[0]);
+	#endif
+
+// Initialize the circular buffers (snd) and (rec)
+
+	vRSndBuffer = vWSndBuffer = vSndBuffer;
+	vRRecBuffer = vWRecBuffer = vRecBuffer;
+
+// Initialize the UART (Rx and Tx) and set it to 8-bits, 1-stop-bits, default baudrate and no parity
+
+	*UART_CTRL  = (1<<BRX_E) | (1<<BTX_E) | (1<<BWORD_LENGTH8);
+	BAUDRATE(KDEFAULT_BAUDRATE);
+
+  	*RQCTRL_IRQ_VEC_22     = (uint32_t)(handle_uart_interruptionTX);
+  	*RQCTRL_IRQ_VEC_23     = (uint32_t)(handle_uart_interruptionRX);
+  	*RQCTRL_SOURCE_EN_W1S  = (1<<BUART_1) | (1<<BUART_0); 									
+	*RQCTRL_IRQ_CONFIG_2  |= (KINT_LEVEL_COMM<<BPRIREQ23) | (KINT_LEVEL_COMM<<BPRIREQ22);
+	*RQCTRL_IRQ_LEVEL_EN   = KINT_SYS_LEVEL;
+
+  	*UART_IRQ1_E = (1<<BRQX_RX_NOT_EMPTY);
+
+	cb_init();
+}
+
+/*
+ * \brief uart_configure
+ *
+ * - Configure the manager
+ *
+ */
+int32_t	uart_configure(const cnfUrtx_t *configure) {
+
+	INTERRUPTION_OFF;
+	switch (configure->oNBits) {
+		case K7BIT: { *UART_CTRL &= ~(1<<BWORD_LENGTH8); break; }
+		default:
+		case K8BIT: { *UART_CTRL |=  (1<<BWORD_LENGTH8); break; }
+	}
+
+	*UART_CTRL &= ~((1<<BPARITY_E) | (1<<BPARITY_ODD));
+
+	switch (configure->oParity) {
+		case KEVEN: { *UART_CTRL |=  (1<<BPARITY_E);                    break; }
+		case KODD:  { *UART_CTRL |=  (1<<BPARITY_E) | (1<<BPARITY_ODD); break; }
+		default:
+		case KNONE: {									   			    break; }
+	}
+
+	switch (configure->oBaudRate) {
+		case KBDDEFAULT: { BAUDRATE(KDEFAULT_BAUDRATE); break; }
+		case KBD2400:	 { BAUDRATE(2400);              break; }
+		case KBD4800:	 { BAUDRATE(4800);              break; }
+		case KBD9600:	 { BAUDRATE(9600);              break; }
+		case KBD19200:	 { BAUDRATE(19200);             break; }
+		case KBD38400:	 { BAUDRATE(38400);             break; }
+		case KBD57600:	 { BAUDRATE(57600);             break; }
+		case KBD115200:	 { BAUDRATE(115200);            break; }
+		case KBD230400:	 { BAUDRATE(230400);            break; }
+		case KBD460800:	 { BAUDRATE(460080);            break; }
+		default:		 { BAUDRATE(KDEFAULT_BAUDRATE); break; }
+	}
+
+	vRXSema = ((configure->oKernSync & (1<<BRXSEMA)) != 0) ? TRUE : FALSE;
+	vTXSema = ((configure->oKernSync & (1<<BTXSEMA)) != 0) ? TRUE : FALSE;
+	RETURN_INT_RESTORED(KUARTNOERR);
+}
+
+/*
+ * \brief uart_write
+ *
+ * - Write a buffer
+ *
+ */
+int32_t	uart_write(const uint8_t *buffer, uint32_t size) {
+			uint32_t	i, newSize;
+	static	bool_t		terminate = FALSE, busy = FALSE;
+
+	INTERRUPTION_OFF;
+	if ((vSending) || (busy)) { RETURN_INT_RESTORED(KUARTSEPRO); }
+	if (size == 0) 			  { RETURN_INT_RESTORED(KUARTLNBU0); }
+
+	busy = TRUE;
+	INTERRUPTION_RESTORED;
+
+	while (!terminate) {
+		while (vSending) { kern_switchFast(); }
+
+		if (size > KUARTLNSNDBUF) { newSize = KUARTLNSNDBUF; size -= KUARTLNSNDBUF; }
+		else					  { newSize = size; terminate = TRUE; 				}
+
+// Copy the input buffer into the send one and start the transfer
+// Enable the TX interruption
+
+		vSending = TRUE;
+		for (i = 0; i < newSize; i++) {
+			vSndBuffer[i] = buffer[i];
+		}
+
+		vWSndBuffer = vSndBuffer + newSize;
+		vRSndBuffer = vSndBuffer;
+		buffer += newSize;
+
+		*UART_IRQ0_E |= (1<<BRQX_TX_EMPTY);
+	}
+	busy = FALSE;
+	terminate = FALSE;
+	return (KUARTNOERR);
+}
+
+/*
+ * \brief uart_read
+ *
+ * - Read n x bytes
+ *
+ */
+int32_t	uart_read(uint8_t *buffer, uint32_t *size) {
+	int32_t		status;
+	uint32_t	i;
+
+	INTERRUPTION_OFF;
+	status  = vStatus;
+	vStatus = KUARTNOERR;
+
+// Interruption problem: buffer full, Framing error, Overrun error, ..
+// In this case, we return 0-bytes read with the corresponding error.
+// The Error is then cancelled for the next time.
+
+	if (status != KUARTNOERR)			{ *size = 0; RETURN_INT_RESTORED(status); 	  }
+	if (*size == 0)                     { *size = 0; RETURN_INT_RESTORED(KUARTNOERR); }
+	if (vRRecBuffer == vWRecBuffer)     { *size = 0; RETURN_INT_RESTORED(KUARTRBUEM); }
+
+	for (i = 0; i < *size; i++) {
+		if (vRRecBuffer == vWRecBuffer) { *size = i; RETURN_INT_RESTORED(KUARTNOERR); }
+
+		*buffer++ = *vRRecBuffer++;
+		if (vRRecBuffer == (vRecBuffer + KUARTLNRECBUF)) {
+			vRRecBuffer = vRecBuffer;
+		}
+	}
+	RETURN_INT_RESTORED(status);
+}
+
+/*
+ * \brief uart_flush
+ *
+ * - Flush the uart manager
+ *
+ */
+int32_t	uart_flush(void) {
+	volatile	sema_t	*semaphore;
+
+// Initialize the circular buffers (rec) and restart the associated semaphore
+
+	INTERRUPTION_OFF;
+	vRRecBuffer = vWRecBuffer = vRecBuffer;
+	kern_getSemaphoreById(KSEMAPHORE_UARTRX, &semaphore);
+	kern_restartSemaphore(semaphore);
+	RETURN_INT_RESTORED(KUARTNOERR);
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief uart_interruptionRX
+ *
+ * - Interruption RX
+ *
+ */
+void	uart_interruptionRX(void) {
+
+ 	TIC_EXCEPTION_TIME;
+	if (*UART_RXSTA & (1<<BRX_OVERRUN))      { *UART_RXSTA = (1<<BRX_OVERRUN);      vStatus = KUARTEROVR; }
+	if (*UART_RXSTA & (1<<BRX_UNDERRRUN))    { *UART_RXSTA = (1<<BRX_UNDERRRUN);    vStatus = KUARTEROVR; }
+	if (*UART_RXSTA & (1<<BRX_FRAME_ERROR))  { *UART_RXSTA = (1<<BRX_FRAME_ERROR);  vStatus = KUARTERFRA; }
+	if (*UART_RXSTA & (1<<BRX_START_ERROR))  { *UART_RXSTA = (1<<BRX_START_ERROR);  vStatus = KUARTERFRA; }
+	if (*UART_RXSTA & (1<<BRX_PARITY_ERROR)) { *UART_RXSTA = (1<<BRX_PARITY_ERROR); vStatus = KUARTERFRA; }
+
+// Read the data and signal the event
+
+	*vWRecBuffer++ = *UART_RX;
+	if (vWRecBuffer == vRRecBuffer) {
+		vStatus = KUARTRBFUL;
+	}
+	if (vWRecBuffer == (vRecBuffer + KUARTLNRECBUF)) {
+		vWRecBuffer = vRecBuffer;
+	}
+
+	#if (defined(__WITHSEMA__) && defined(__UART_SEMA_RX__))
+	if (vRXSema) { kern_signalSemaphore(vSeHandleRX[0]); }
+	#endif
+
+	TAC_EXCEPTION_TIME;
+}
+
+/*
+ * \brief uart_interruptionTX
+ *
+ * - Interruption TX
+ *
+ */
+void	uart_interruptionTX(void) {
+
+ 	TIC_EXCEPTION_TIME;
+	if (cb_CTSCheck()) {
+		*UART_TX = *vRSndBuffer++;
+		if (vRSndBuffer == vWSndBuffer) {
+
+// Terminated; disable the Tx interruption
+
+			*UART_IRQ0_E &= ~(1<<BRQX_TX_EMPTY);
+			vSending = FALSE;
+
+			#if (defined(__WITHSEMA__) && defined(__UART_SEMA_TX__))
+			if (vTXSema) { kern_signalSemaphore(vSeHandleTX[0]); }
+			#endif
+		}
+	}
+
+// Continue to send data
+
+	TAC_EXCEPTION_TIME;
+}
+

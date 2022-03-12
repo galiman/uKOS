@@ -1,0 +1,478 @@
+/*
+; model_ssd1331.
+; ==============
+
+;------------------------------------------------------------------------
+; Author:	Nussbaum Pascal	The 2016-09-02
+; Modifs:	Franzi Edo.		The 2016-11-13
+;
+; SVN:
+; $Author:: efr              $:  Author of last commit
+; $Rev:: 166                 $:  Revision of last commit
+; $Date:: 2017-07-02 1#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the SSD133 device.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+#include 	<SSD1331/SSD1331.h>
+
+static	uint16_t	vCurrentColor = 0xFFFF;
+static	uint16_t	vCurrentFont  = SSD1331_FONT_5x7;
+
+// Prototypes
+// ==========
+
+static	void	_drawText3x5(uint16_t x, uint16_t y, char_t *text);
+static	void	_drawText5x7(uint16_t x, uint16_t y, char_t *text);
+static	void	_goToXY(int16_t x, int16_t y);
+static	void	_setColor(uint8_t r, uint8_t g, uint8_t b);
+static	void	_drawText(char_t *text);
+static	void	_drawImage(uint16_t w, uint16_t h, uint8_t *image);
+static	void	_drawPixel(uint16_t x, uint16_t y);
+static	void	_drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);	
+static	void	_fillRect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
+static	void	_copyRect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2);
+static	void	cb_writeCommand(uint8_t command); 
+static	void	cb_writeData(uint16_t data);
+
+/*
+ * \brief ssd1331_init
+ *
+ * - Initialize some specific hardware parts
+ *
+ */
+int32_t	ssd1331_init(void) {
+			uint32_t	i;
+	const	uint8_t		aTabInitSSD1331[] = {
+							SSD1331_CMD_DISPLAYOFF,		// 0xAE
+							SSD1331_CMD_SETREMAP,		// 0xA0
+							0x72,						// RGB Color
+							SSD1331_CMD_STARTLINE,		// 0xA1
+							0x00,						//
+							SSD1331_CMD_DISPLAYOFFSET,	// 0xA2
+							0x00,						//
+							SSD1331_CMD_NORMALDISPLAY,	// 0xA4
+							SSD1331_CMD_SETMULTIPLEX,	// 0xA8
+							0x3F,						// 0x3F 1/64 duty
+							SSD1331_CMD_SETMASTER,		// 0xAD
+							0x8E,						//
+							SSD1331_CMD_POWERMODE,		// 0xB0
+							0x0B,						//
+							SSD1331_CMD_PRECHARGE,		// 0xB1
+							0x31,						//
+							SSD1331_CMD_CLOCKDIV,		// 0xB3
+							0xF0,						// 7:4 = Oscillator Frequency, 3:0 = CLK Div Ratio (A[3:0]+1 = 1..16)
+							SSD1331_CMD_PRECHARGEA,		// 0x8A
+							0x64,						//
+							SSD1331_CMD_PRECHARGEB,		// 0x8B
+							0x78,						//
+							SSD1331_CMD_PRECHARGEA,		// 0x8C
+							0x64,						//
+							SSD1331_CMD_PRECHARGELEVEL,	// 0xBB
+							0x3A,						//
+							SSD1331_CMD_VCOMH,			// 0xBE
+							0x3E,						//
+							SSD1331_CMD_MASTERCURRENT,	// 0x87
+							0x06,						//
+							SSD1331_CMD_CONTRASTA,		// 0x81
+							0x91,						//
+							SSD1331_CMD_CONTRASTB,		// 0x82
+							0x50,						//
+							SSD1331_CMD_CONTRASTC, 		// 0x83
+							0x7D,						//
+							SSD1331_CMD_DISPLAYON		// Turn on oled display
+						};
+
+	cb_control(KINIT);
+
+// Initialization sequence
+
+	for (i = 0; i < sizeof(aTabInitSSD1331); i++) {
+		cb_writeCommand(aTabInitSSD1331[i]);
+	}
+
+	kern_suspendProcess(10);
+	_setColor(0, 0, 0);
+	_fillRect(0, 0, 95, 63);
+	_setColor(255, 255, 255);
+	return (KSSD1331NOERR);
+}
+
+/*
+ * \brief ssd1331_setColor
+ *
+ * - Set the colors
+ *
+ */
+int32_t	ssd1331_setColor(uint8_t r, uint8_t g, uint8_t b)  {
+
+	_setColor(r, g, b);
+	return (KSSD1331NOERR);
+}
+
+/*
+ * \brief ssd1331_drawText
+ *
+ * - Draw a text
+ *
+ */
+int32_t	ssd1331_drawText(char_t *text) {
+
+	_drawText(text);
+	return (KSSD1331NOERR);
+}
+
+/*
+ * \brief ssd1331_drawImage
+ *
+ * - Draw an image
+ *
+ */
+int32_t	ssd1331_drawImage(uint16_t w, uint16_t h, uint8_t *image) {
+
+	_drawImage(w, h, image);
+	return (KSSD1331NOERR);
+}
+
+/*
+ * \brief ssd1331_drawPixel
+ *
+ * - Draw a pixel
+ *
+ */
+int32_t	ssd1331_drawPixel(uint16_t x, uint16_t y) {
+
+	_drawPixel(x, y);
+	return (KSSD1331NOERR);
+}
+
+/*
+ * \brief ssd1331_drawLine
+ *
+ * - Draw a pixel
+ *
+ */
+int32_t	ssd1331_drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {	
+
+	_drawLine(x0, y0, x1, y1);
+	return (KSSD1331NOERR);
+}
+
+/*
+ * \brief ssd1331_fillRect
+ *
+ * - Fill a rectangle
+ *
+ */
+int32_t	ssd1331_fillRect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+
+	_fillRect(x0, y0, x1, y1);
+	return (KSSD1331NOERR);
+}
+
+/*
+ * \brief ssd1331_copyRect
+ *
+ * - Copy a rectangle
+ *
+ */
+int32_t	ssd1331_copyRect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2) {
+
+	_copyRect(x0, y0, x1, y1, x2, y2);
+	return (KSSD1331NOERR);
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief _drawText3x5
+ *
+ * - Draw a 3x5 text
+ *
+ */
+static	void	_drawText3x5(uint16_t x, uint16_t y, char_t *text) {
+	uint16_t	r, c, w;
+
+	for (w = 0; (w < 24) && (text[w] != 0 ); w++);
+	w *= 4;
+	
+	if (w+x >= SSD1331_WIDTH) {
+		w = SSD1331_WIDTH-x;
+	}
+	
+// Draw a bar of characters
+
+	for (r = 0; r < 5; r++) {
+		_goToXY(x, y);
+		for (c = 0; c < w; c++) {
+			if ((OLEDFont3x5[(text[c/4] - 32)*5 + r]>>(3 - (c%4))) & 1) {
+				cb_writeData(vCurrentColor);
+			}
+			else {
+				cb_writeData(0);
+			}
+		}
+	}
+}
+
+/*
+ * \brief _drawText5x7
+ *
+ * - Draw a 5x7 text
+ *
+ */
+static	void	_drawText5x7(uint16_t x, uint16_t y, char_t *text) {
+	uint16_t	r, c, w;
+	
+	for (w = 0; (w < 16) && (text[w] != 0 ); w++);
+	w *= 6;
+	
+	if (w+x >= SSD1331_WIDTH) {
+		w = SSD1331_WIDTH-x;
+	}
+		
+// Draw a bar of characters
+
+	for (r = 0; r < 7; r++, y++) {
+		_goToXY(x, y);
+		for (c = 0; c < w; c++) {
+			if ((OLEDFont5x7[(text[c/6] - 32)*7 + r]>>(5 - (c%6))) & 1) {
+				cb_writeData(vCurrentColor);
+			}
+			else {
+				cb_writeData(0);
+			}
+		}
+	}
+}
+
+/*
+ * \brief _goToXY
+ *
+ * - Goto a x-y position
+ *
+ */
+static	void	_goToXY(int16_t x, int16_t y) {
+
+// Set the x and y coordinate
+
+	cb_writeCommand(SSD1331_CMD_SETCOLUMN);
+	cb_writeCommand(x);
+	cb_writeCommand(SSD1331_WIDTH-1);
+
+	cb_writeCommand(SSD1331_CMD_SETROW);
+	cb_writeCommand(y);
+	cb_writeCommand(SSD1331_HEIGHT-1);
+}
+
+/*
+ * \brief _setColor
+ *
+ * - Set the colors
+ *
+ */
+static	void	_setColor(uint8_t r, uint8_t g, uint8_t b)  {
+
+	INTERRUPTION_OFF;
+	vCurrentColor   = r>>3;
+	vCurrentColor <<= 6;
+	vCurrentColor  |= g>>2;
+	vCurrentColor <<= 5;
+	vCurrentColor  |= b>>3;
+	INTERRUPTION_RESTORED;
+}
+
+/*
+ * \brief _drawText
+ *
+ * - Draw a text
+ *
+ */
+static	void	_drawText(char_t *text) {
+	uint16_t	swapColor;
+
+	switch (vCurrentFont) {
+		case SSD1331_FONT_3x5: {
+			_copyRect(0, 6, SSD1331_WIDTH-1, SSD1331_HEIGHT-1, 0, 0);
+
+			swapColor = vCurrentColor;
+			vCurrentColor = 0;
+			_fillRect(0, SSD1331_HEIGHT-6, SSD1331_WIDTH-1, SSD1331_HEIGHT-1);
+			vCurrentColor = swapColor;
+			_drawText3x5(0, SSD1331_HEIGHT-6, text);
+			break;
+		}
+		case SSD1331_FONT_5x7: {
+			_copyRect(0, 8, SSD1331_WIDTH-1, SSD1331_HEIGHT-1, 0, 0);
+
+			swapColor = vCurrentColor;
+			vCurrentColor = 0;
+			_fillRect(0, SSD1331_HEIGHT-8, SSD1331_WIDTH-1, SSD1331_HEIGHT-1);
+			vCurrentColor = swapColor;
+			_drawText5x7(0, SSD1331_HEIGHT-8, text);
+			break;
+		}
+		default: {
+			break;
+		}	
+	}
+}
+
+/*
+ * \brief _drawImage
+ *
+ * - Draw an image
+ *
+ */
+static	void	_drawImage(uint16_t w, uint16_t h, uint8_t *image) {
+	uint8_t		pixel;
+	uint16_t	x, y, step, line_length;
+	
+	step = h / SSD1331_HEIGHT;
+	line_length = w / step;
+	if (line_length > SSD1331_WIDTH) {
+		line_length = SSD1331_WIDTH;
+	}
+	
+	for (y = 0; y < SSD1331_HEIGHT; y++) {
+		_goToXY(0, y);
+		for (x = 0; x < line_length; x++) {
+			pixel = image[(y*h*step) + (x*step)];
+			_setColor(pixel, pixel, pixel);
+			cb_writeData(vCurrentColor);
+		}
+	}
+}
+
+/*
+ * \brief _drawPixel
+ *
+ * - Draw a pixel
+ *
+ */
+static	void	_drawPixel(uint16_t x, uint16_t y) {
+
+	_goToXY(x, y);
+	cb_writeData(vCurrentColor);
+}
+
+/*
+ * \brief _drawLine
+ *
+ * - Draw a pixel
+ *
+ */
+static	void	_drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {	
+
+	cb_writeCommand(SSD1331_CMD_DRAWLINE);
+	cb_writeCommand(x0);
+	cb_writeCommand(y0);
+	cb_writeCommand(x1);
+	cb_writeCommand(y1);
+	kern_suspendProcess(SSD1331_DELAYS_HWLINE);  
+
+	cb_writeCommand((uint8_t)((vCurrentColor>>11)<<1));
+	cb_writeCommand((uint8_t)((vCurrentColor>>5) & 0x3F));
+	cb_writeCommand((uint8_t)((vCurrentColor<<1) & 0x3F));
+
+// Waiting for the command completion
+
+	kern_suspendProcess(SSD1331_DELAYS_HWLINE);  
+}
+
+/*
+ * \brief _fillRect
+ *
+ * - Fill a rectangle
+ *
+ */
+static	void	_fillRect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+
+// Fill mode
+
+	cb_writeCommand(SSD1331_CMD_FILL);
+	cb_writeCommand(0x01);
+
+// Corner coordinates
+// x0 starting column
+// y0 starting row
+// x1 end column
+// y1 end row
+	
+	cb_writeCommand(SSD1331_CMD_DRAWRECT);
+	cb_writeCommand(x0 & 0xFF);
+	cb_writeCommand(y0 & 0xFF);
+	cb_writeCommand(x1 & 0xFF);
+	cb_writeCommand(y1 & 0xFF);
+  
+// Outline color
+
+	cb_writeCommand((uint8_t)((vCurrentColor>>11)<<1));
+	cb_writeCommand((uint8_t)((vCurrentColor>>5) & 0x3F));
+	cb_writeCommand((uint8_t)((vCurrentColor<<1) & 0x3F));
+	
+// Fill color
+
+	cb_writeCommand((uint8_t)((vCurrentColor>>11)<<1));
+	cb_writeCommand((uint8_t)((vCurrentColor>>5) & 0x3F));
+	cb_writeCommand((uint8_t)((vCurrentColor<<1) & 0x3F));
+	
+// Waiting for the command completion
+
+	kern_suspendProcess(SSD1331_DELAYS_HWFILL);  
+}
+
+/*
+ * \brief _copyRect
+ *
+ * - Copy a rectangle
+ *
+ */
+static	void	_copyRect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2) {
+
+// x0 R0 - starting column
+// y0 R0 - starting row
+// x1 R0 - end column
+// y1 R0 - end row
+// x2 R1 - end column
+// y2 R1 - end row  
+
+	cb_writeCommand(SSD1331_CMD_COPYRECT);
+	cb_writeCommand(x0 & 0xFF);
+	cb_writeCommand(y0 & 0xFF);
+	cb_writeCommand(x1 & 0xFF);
+	cb_writeCommand(y1 & 0xFF);
+	cb_writeCommand(x2 & 0xFF);
+	cb_writeCommand(y2 & 0xFF);
+
+// Waiting for the command completion
+
+	kern_suspendProcess(SSD1331_DELAYS_HWFILL);  
+}
+

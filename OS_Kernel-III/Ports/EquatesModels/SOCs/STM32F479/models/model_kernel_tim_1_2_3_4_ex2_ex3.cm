@@ -1,0 +1,855 @@
+/*
+; model_kernel_tim_1_2_3_4_ex2_ex3.
+; =================================
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 185                  $:  Revision of last commit
+; $Date:: 2017-08-17 15:20:55#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Model for controlling the "model_kernel_tim_1_2_3_4_ex2_ex3" device.
+;
+;			Tim 1	- 1-ms reference time
+;			Tim 2	- 20-ms	process timeout
+;			Tim 3	- 1-us free running timer
+;			Tim 4	- user defined intervals for precise state-machines
+;			ex2		- software interruption for preemption
+;			ex3		- software interruption for message passing
+;
+;			This code has to support the following routines:
+;			- kernel_init
+;			- kernel_runKernel
+;			- kernel_loadOverlay
+;			- kernel_setLowPower
+;			- kernel_runPrecise
+;			- kernel_initStackFrame
+;			- kernel_setUnixTime
+;			- kernel_getUnixTime
+;			- kernel_timeStmp
+;			- kernel_timeNext
+;			- kernel_interruptionFast
+;			- kernel_switcher
+;			- kernel_message
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+#define	KFPRET1		1000000														// 1'000'000-Hz
+#define	KFINTT1		(1000/KTTIMEFAST)											// 1'000-Hz
+#define KPSCT1		((KFREQUENCY_T1/KFPRET1)-1)									// Prescaler for 1'000'000-Hz
+#define KARRT1		((KFPRET1/KFINTT1)-1)										// Autoreload		
+		
+#define	KFPRET2		1000000														// 1'000'000-Hz
+#define	KFINTT2		(1000/KTTIMESHARING)										// 50-Hz
+#define KPSCT2		((KFREQUENCY_T2/KFPRET2)-1)									// Prescaler for 1'000'000-Hz
+#define KARRT2		((KFPRET2/KFINTT2)-1)										// Autoreload		
+		
+#define	KFPRET3		1000000														// 1'000'000-Hz
+#define	KFINTT3		KTTIMESTATISTIC												// -
+#define KPSCT3		((KFREQUENCY_T3/KFPRET3)-1)									// Prescaler for 1'000'000-Hz
+#define KARRT3		(-1)														// Autoreload
+
+#define	KFPRET4		1000000														// 1'000'000-Hz
+#define KPSCT4		((KFREQUENCY_T4/KFPRET4)-1)									// Prescaler for 1'000'000-Hz
+#define KARRT4		(-1)														// Autoreload
+
+extern				void		(*vExce_indIntVectors[KNBINTERRUPTIONS])(void);
+static				void		(*vCodeRunPrecise)(void);						// Ptr on the Code for the call of the runPrecise routine
+extern	volatile	proc_t		*vKern_backwardProcess;							// Ptr on the backward process
+static	volatile	uint16_t	vTimeStart     = 0;								// Time-stamp: when the process was scheduled
+static	volatile	uint16_t	vTimeStop      = 0;								// Time-stamp: when the process was stopped
+static	volatile	uint16_t	vTimeLastStart = 0;								// Time-stamp: when the process was started (previous cycle)
+static				uint64_t	vTiccount      = 0;								// 64-bit timer (1-us)
+static				uint32_t	vUnixTime;										// Absolute UNIX time
+		volatile	uint16_t	vTimeException = 0;								// Sum of time spent inside all the exceptions
+		volatile	uint32_t	vKern_stackProcess;								// Process stack (entry point by Trap)
+		volatile	uint32_t	vKern_message;									// Trap message	used by the uKernel
+
+// Prototypes
+// ==========
+
+static	void	_TIM4_IRQHandler(void);
+static	void	_newContextTOU(void);
+static	void	_newContextMSG(void);
+static	void	_timeStart(void);
+static	void	_timeStop(void);
+static	void	_timeStmp(void);
+
+/*
+ * \brief kernel_init
+ *
+ * - Initialize the UNIX time 1-1-1970 0h 0m 0s
+ * - Turn on the timers
+ *
+ */
+void	kernel_init(void) {
+
+	RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+	RCC->APB1ENR |= RCC_APB1ENR_TIM3EN;
+	RCC->APB1ENR |= RCC_APB1ENR_TIM4EN;
+
+	vUnixTime = 0;
+}
+
+/*
+ * \brief kernel_runKernel
+ *
+ * - Initialize all the timers (1-ms & 20-ms and time-stamp)
+ * - Enable the time sharing and all the uKernel interruptions
+ *
+ */
+void	kernel_runKernel(void) {
+
+	NVIC->IP[TIM1_UP_TIM10_IRQn] = (KINT_LEVEL_TIMERS<<4);
+	NVIC->ISER[0] |= (1<<(TIM1_UP_TIM10_IRQn & 0x1F));
+
+	NVIC->IP[TIM2_IRQn] = (KINT_LEVEL_TIMERS<<4);
+	NVIC->ISER[0] |= (1<<(TIM2_IRQn & 0x1F));
+
+	NVIC->IP[TIM4_IRQn] = (KINT_LEVEL_TIMERS<<4);
+	NVIC->ISER[0] |= (1<<(TIM4_IRQn & 0x1F));
+
+	NVIC->IP[EXTI2_IRQn] = (KINT_LEVEL_ALL<<4);
+	NVIC->ISER[0] |= (1<<(EXTI2_IRQn & 0x1F));
+
+	NVIC->IP[EXTI3_IRQn] = (KINT_LEVEL_SWI<<4);
+	NVIC->ISER[0] |= (1<<(EXTI3_IRQn & 0x1F));
+
+// Timer 1 (1-ms)
+
+	TIM1->PSC  = KPSCT1;
+	TIM1->ARR  = KARRT1;
+	TIM1->DIER = TIM_DIER_UIE;
+    TIM1->CR1 |= TIM_CR1_CEN;
+
+// Timer 2 (20-ms)
+
+	TIM2->PSC  = KPSCT2;
+	TIM2->ARR  = KARRT2;
+	TIM2->DIER = TIM_DIER_UIE;
+    TIM2->CR1 |= TIM_CR1_CEN;
+
+// Timer 3 (free running timer for statistics)
+
+	TIM3->PSC  = KPSCT3;
+	TIM3->ARR  = KARRT3;
+	TIM3->DIER = 0;
+    TIM3->CR1 |= TIM_CR1_CEN;
+
+// The software interruptions
+
+	EXTI->IMR |= (1<<BKERNPREEMPTION);
+	EXTI->IMR |= (1<<BKERNSWIMSG);
+}
+
+#if (defined(__WITHOVLY__))
+/*
+ * \brief kernel_loadOverlay
+ *
+ * - Load an overlay process inside the overlay RAM
+ *
+ */
+void	kernel_loadOverlay(uint32_t idModule) {
+
+}
+#endif
+
+/*
+ * \brief kernel_setLowPower
+ *
+ * - Set the low power mode
+ *
+ */
+void	kernel_setLowPower(uint8_t mode) {
+
+	switch (mode) {
+		case KCPUPNORMAL:
+		case KCPUPDEEP:
+		case KCPUPHIBERNATE:
+		case KCPUPSTOP:
+		default: {
+
+// Waiting for an interruption
+
+			WAITING_INTERRUPTION;
+			break;
+		}
+	}
+}
+
+/*
+ * \brief kernel_runPrecise
+ *
+ * - Initialize the runPrecise function
+ *
+ */
+void	kernel_runPrecise(uint16_t time, void (*code)(void)) {
+
+	vExce_indIntVectors[TIM4_IRQn] = _TIM4_IRQHandler;
+
+	vCodeRunPrecise = code;
+	switch (time) {
+		case 0: {
+			TIM4->DIER = 0;
+			TIM4->CR1 &= ~TIM_CR1_CEN;
+			break;
+		}
+		default: {
+			TIM4->DIER = 0;
+			TIM4->CR1 &= ~TIM_CR1_CEN;
+			TIM4->SR  &= ~TIM_SR_UIF;
+
+			TIM4->PSC   = (uint16_t)(KPSCT4);
+			TIM4->ARR   = time - 1;
+			TIM4->DIER  = TIM_DIER_UIE;
+   			TIM4->CR1  |= TIM_CR1_CEN;
+			break;
+		} 
+	}
+}
+
+static	void	_TIM4_IRQHandler(void) {
+	void	(*code)(void);
+
+// INT acknowledge
+
+    if (TIM4->SR &   TIM_SR_UIF) {
+		TIM4->SR &= ~TIM_SR_UIF;
+	}
+
+	code = (void (*)(void))vCodeRunPrecise;
+	code();
+}
+
+/*
+ * \brief kernel_initStackFrame
+ *
+ * - Initialize and prepare the stack frame for a process
+ *
+ */
+void	kernel_initStackFrame(volatile proc_t *handle, const void *argument) {
+	uint32_t	*stackFrame, i;
+
+// Fill the stack with a "magic" pattern (for statistic)
+
+	stackFrame = handle->oSpecification.oStkSup;
+	for (i = 0; i < handle->oSpecification.oSzStk; i++) {
+		*--stackFrame = (('u'<<24) | ('K'<<16) | ('O'<<8) | 'S');
+	}
+
+// Prepare the stack frame
+
+	stackFrame = handle->oSpecification.oStkSup;				//
+	*--stackFrame = 0x01000000;									// xPSR
+	*--stackFrame = (uint32_t)handle->oSpecification.oCode;		// PC
+	*--stackFrame = 0xFFFFFFFD;									// LR
+	*--stackFrame = 0x12121212;									// r12
+	*--stackFrame = 0x03030303;									// r3
+	*--stackFrame = 0x02020202;									// r2
+	*--stackFrame = 0x01010101;									// r1
+	*--stackFrame = (uint32_t)argument;							// r0
+	*--stackFrame = 0x11111111;									// r11
+	*--stackFrame = 0x10101010;									// r10
+	*--stackFrame = 0x09090909;									// r9
+	*--stackFrame = 0x08080808;									// r8
+	*--stackFrame = 0x07070707;									// r7
+	*--stackFrame = 0x06060606;									// r6
+	*--stackFrame = 0x05050505;									// r5
+	*--stackFrame = 0x04040404;									// r4
+	*--stackFrame = (KINT_IMASK_ALL<<4);						// basepri
+	*--stackFrame = 0xFFFFFFFD;									// Initial exception return (Thread mode, SP = PSP)
+																// fpu is not considered during the process creation
+	handle->oSpecification.oStkSup = stackFrame;
+}
+
+/*
+ * \brief kernel_setUnixTime
+ *
+ * - Set the UNIX absolute time
+ *
+ */
+void	kernel_setUnixTime(uint32_t unixTime) {
+
+	vUnixTime = unixTime;
+}
+
+/*
+ * \brief kernel_getUnixTime
+ *
+ * - Get the UNIX absolute time
+ *
+ */
+void	kernel_getUnixTime(uint32_t *unixTime) {
+
+	 *unixTime = vUnixTime;
+}
+
+/*
+ * \brief kernel_timeStmp
+ *
+ * - Give a new 64-bit time-stamp (1-us of resolution)
+ *   - 0x0000000000000000 to 0xFFFFFFFFFFFFFFFF incremental counter
+ *
+ */
+void	kernel_timeStmp(uint64_t *timeStmp) {
+
+	_timeStmp();
+	*timeStmp = vTiccount;
+}
+
+/*
+ * \brief kernel_timeNext
+ *
+ * - Give a new time for a process
+ *
+ */
+void	kernel_timeNext(void) {
+
+	TIM2->CNT  = 0;
+	TIM2->ARR  = KARRT2;
+	TIM2->SR  &= ~TIM_SR_UIF;
+    TIM2->CR1 |=  TIM_CR1_CEN;
+}
+
+/*
+ * \brief kernel_getPC
+ *
+ * - Get a value of the PC
+ *
+ */
+void	kernel_getPC(const uint32_t *stackProcess, uint32_t *pc) {
+	uint8_t		pcOffset = 1;
+	uint32_t	lr;
+
+// uKOS stackframe:
+//
+// stmdb 		r0!,{r14}		-> pcOffset = 1
+//
+// if the fpu was used
+// vstmdbeq		r0!,{s16-s31}	-> pcOffset += ((31 - 16) + 1)
+//
+// stmdb 		r0!,{r1,r4-r11}	-> pcOffset += 1 + ((11 - 4) + 1)
+//
+// Automatic stacked
+//
+//				r3-r0			-> pcOffset += ((3 - 0) + 1)
+//				r12				-> pcOffset += 1
+//				lr (r14)		-> pcOffset += 1
+//				PC
+
+	lr = stackProcess[0];
+
+// If the fpu was used         				 s31 to s16 
+//										  ---------------
+	if ((lr & (1<<4)) == 0) { pcOffset += ((31 - 16) + 1); }
+
+//              r1,     r11 to r4,          r3 to r0,     r12,  r14
+//              --   ----------------   ---------------   ---   ---
+	pcOffset += 1    + ((11 - 4) + 1)   + ((3 - 0) + 1)   + 1   + 1;
+	*pc = (stackProcess[pcOffset]);
+}
+
+/*
+ * \brief kernel_getFunctionName
+ *
+ * - Get the function name prepended by the gcc compiler
+ *   (extraction using the option "-mpoke-function-name"
+ *
+ *  t0
+ *		.ascii "arm_poke_function_name", 0
+ *		.align
+ *  t1
+ *		.word 0xff000000 + (t1 - t0)
+ *		arm_poke_function_name
+ *		mov     ip, sp
+ *		stmfd   sp!, {fp, ip, lr, pc}
+ *		sub     fp, ip, #4
+ *
+ */
+void	kernel_getFunctionName(const uint32_t pc, const char_t **function) {
+			uint16_t	offset;
+			uint32_t	nameLen;
+	const	uint32_t	*ptr;
+
+	ptr = (const uint32_t *)((pc + 2) & (~0x3U));
+
+	for (offset = 1; (offset < 16*1024) && ((uint32_t)&ptr[-offset] > 0x0); ++offset) {
+		if ((ptr[-offset] & 0xFFFFFF00) == 0xFF000000) {
+			nameLen = ptr[-offset] & 0xFFU;
+			*function = &((const char_t*)&ptr[-offset])[-nameLen];
+			return;
+		}
+	}
+	*function = NULL;
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief TIM1_UP_TIM10_IRQHandler
+ *
+ * - Fine time interruption
+ * - Increment the ticcount of 1-us resolution
+ * - Verify the timeout condition of the suspended processes
+ *
+ */
+void	TIM1_UP_TIM10_IRQHandler(void) {
+	static	uint32_t	counter = 0;
+
+// INT acknowledge
+// Tic_count++ and verify the timeout conditions
+// Increment the UNIX time seconds
+
+    if ((TIM1->SR & TIM_SR_UIF) != 0){
+		TIM1->SR &= ~TIM_SR_UIF;
+	}
+
+	sche_callBackFast();
+	if (counter++ % (1000/KTIMEUNIT) == 0) {
+		vUnixTime++;
+	}
+	_timeStmp();
+}
+
+/*
+ * \brief EXTI2_IRQHandler
+ *
+ * - Preemption
+ * - Save the context
+ * - Save the context stack
+ * - Change the context
+ * - Give another timeout to the process
+ * - Recover another context
+ *
+ * - Save the full stack frame (uKOS like)
+ *
+ *		Normal stack frame			Stack frame with fpu
+ *		IOFF						IOFF
+ *
+ *		->							FPSCR
+ *		->							S15..S0
+ *		->	xPSR					xPSR
+ *		->	PC						PC
+ *		->	LR(R14)					LR(R14)
+ *		->	R12						R12
+ *		->	R3..R0					R3..R0		Block stacked by an exception
+ *
+ *		->	R11..R4					R11..R4
+ *		->	BASEPRI					BASEPRI
+ *		->							S31..S16
+ *		->	LR(R14)					LR(R14)		Block stacked manually
+ *
+ *
+ * !!! Do not generate prologue/epilogue sequences
+ *
+ */
+
+// Test for GCC version for adapting the assembler context code
+
+#if	(uKOS_GCC_VERSION > 40805)
+#define	KSAVEREGISTERS	"r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"
+#else
+#define	KSAVEREGISTERS
+#endif
+
+void	EXTI2_IRQHandler(void) __attribute__ ((naked)) __attribute__ ((optimize("Os")));
+void	EXTI2_IRQHandler(void) {
+
+// Interruption ACK
+
+	EXTI->PR |= (1<<BKERNPREEMPTION);
+
+// Save the registers r4..r11 and the basepri
+// r0 contains the stack
+
+	__asm__ volatile (
+	"cpsid		i					\n"		//
+	"mrs		r0,psp				\n"		// r0 = stack
+	"mrs		r1,basepri			\n"		// r1 = basepri
+	"stmdb 		r0!,{r1,r4-r11}		\n"		// Save the register list
+	"tst		r14,#0x10			\n"		//
+	"it 		eq					\n"		//
+	"vstmdbeq	r0!,{s16-s31}		\n"		// If used, save the fp registers
+	"stmdb 		r0!,{r14}			\n"		// Save the EXCEPTION return
+	"msr		psp,r0				\n"		//
+	"str		r0,%0				\n"		// Save the stack of the old process
+	"cpsie		i					\n"		//
+	:
+	: "m" (vKern_stackProcess)
+	: KSAVEREGISTERS
+	);
+
+// Change the context due to a timeout
+
+	_newContextTOU();
+
+// Restore the registers r4..r11 and the basepri
+
+	__asm__ volatile (
+	"cpsid		i					\n"		//
+	"ldr		r0,%0				\n"		// Recover the stack of the new process
+	"ldmia		r0!,{r14}			\n"		// Recover the EXCEPTION return
+	"tst		r14,#0x10			\n"		//
+	"it 		eq					\n"		//
+	"vldmiaeq 	r0!,{s16-s31}		\n"		// If used, restore the fp registers
+	"ldmia 		r0!,{r1,r4-r11}		\n"		// Restore the register list
+	"msr		psp,r0				\n"		// New stack
+	"msr		basepri,r1			\n"		// Restore the basepri
+	:
+	: "m" (vKern_stackProcess)
+	: KSAVEREGISTERS
+	);
+
+// Return
+
+	__asm__ volatile (
+	"cpsie		i					\n"		//
+	"dmb							\n"		//
+	"dsb							\n"		//
+	"isb							\n"		//
+	"bx			lr					\n"		// Return
+	);
+}
+
+/*
+ * \brief TIM2_IRQHandler
+ *
+ * - Time slice timeout
+ * - Save the context
+ * - Save the context stack
+ * - Change the context
+ * - Give another timeout to the process
+ * - Recover another context
+ *
+ * - Save the full stack frame (uKOS like)
+ *
+ *		Normal stack frame			Stack frame with fpu
+ *		IOFF						IOFF
+ *
+ *		->							FPSCR
+ *		->							S15..S0
+ *		->	xPSR					xPSR
+ *		->	PC						PC
+ *		->	LR(R14)					LR(R14)
+ *		->	R12						R12
+ *		->	R3..R0					R3..R0		Block stacked by an exception
+ *
+ *		->	R11..R4					R11..R4
+ *		->	BASEPRI					BASEPRI
+ *		->							S31..S16
+ *		->	LR(R14)					LR(R14)		Block stacked manually
+ *
+ *
+ * !!! Do not generate prologue/epilogue sequences
+ *
+ */
+
+// Test for GCC version for adapting the assembler context code
+
+#if	(uKOS_GCC_VERSION > 40805)
+#define	KSAVEREGISTERS	"r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"
+#else
+#define	KSAVEREGISTERS
+#endif
+
+void	TIM2_IRQHandler(void) __attribute__ ((naked)) __attribute__ ((optimize("Os")));
+void	TIM2_IRQHandler(void) {
+
+// Save the registers r4..r11 and the basepri
+// r0 contains the stack
+
+	__asm__ volatile (
+	"cpsid		i					\n"		//
+	"mrs		r0,psp				\n"		// r0 = stack
+	"mrs		r1,basepri			\n"		// r1 = basepri
+	"stmdb 		r0!,{r1,r4-r11}		\n"		// Save the register list
+	"tst		r14,#0x10			\n"		//
+	"it 		eq					\n"		//
+	"vstmdbeq	r0!,{s16-s31}		\n"		// If used, save the fp registers
+	"stmdb 		r0!,{r14}			\n"		// Save the EXCEPTION return
+	"msr		psp,r0				\n"		//
+	"str		r0,%0				\n"		// Save the stack of the old process
+	"cpsie		i					\n"		//
+	:
+	: "m" (vKern_stackProcess)
+	: KSAVEREGISTERS
+	);
+
+// Change the context due to a timeout
+
+	_newContextTOU();
+
+// Restore the registers r4..r11 and the basepri
+
+	__asm__ volatile (
+	"cpsid		i					\n"		//
+	"ldr		r0,%0				\n"		// Recover the stack of the new process
+	"ldmia		r0!,{r14}			\n"		// Recover the EXCEPTION return
+	"tst		r14,#0x10			\n"		//
+	"it 		eq					\n"		//
+	"vldmiaeq 	r0!,{s16-s31}		\n"		// If used, restore the fp registers
+	"ldmia 		r0!,{r1,r4-r11}		\n"		// Restore the register list
+	"msr		psp,r0				\n"		// New stack
+	"msr		basepri,r1			\n"		// Restore the basepri
+	:
+	: "m" (vKern_stackProcess)
+	: KSAVEREGISTERS
+	);
+
+// Return
+
+	__asm__ volatile (
+	"cpsie		i					\n"		//
+	"dmb							\n"		//
+	"dsb							\n"		//
+	"isb							\n"		//
+	"bx			lr					\n"		// Return
+	);
+}
+
+/*
+ * \brief _newContextTOU
+ *
+ * - Change the context due to a timeout
+ *   - INT acknowledge and new time for the next process
+ *   - Change the context and prepare the next process
+ *     - Stop time of the process
+ *     - Clear the interruption
+ *     - Disable the timer
+ *     - Change the context
+ *     - Start time of the process
+ *
+ */
+static void	__attribute__ ((noinline))_newContextTOU(void) {
+
+	_timeStop();
+	if ((TIM2->SR & TIM_SR_UIF) != 0) {
+		TIM2->SR &= ~TIM_SR_UIF;
+	}
+    TIM2->CR1 &= ~TIM_CR1_CEN;
+
+	sche_callBackSlow();
+	_timeStart();
+
+	#if (defined(__WITHSTAT__))
+	stat_statistic(vKern_backwardProcess, vTimeStart, vTimeStop, vTimeLastStart, vTimeException);
+	vTimeException = 0;
+	#endif
+}
+
+/*
+ * \brief EXTI3_IRQHandler
+ *
+ * - TRAP
+ * - Save the context
+ * - Save the context stack
+ * - Process the message sent
+ * - Change the context
+ * - Give another timeout to the process
+ * - Recover another context
+ *
+ * - Save the full stack frame (uKOS like)
+ *
+ *		Normal stack frame			Stack frame with fpu
+ *		IOFF						IOFF
+ *
+ *		->	Message		+36			+108
+ *		->	Message		+32			+104
+ *
+ *		->							FPSCR
+ *		->							S15..S0
+ *		->	xPSR					xPSR
+ *		->	PC						PC
+ *		->	LR(R14)					LR(R14)
+ *		->	R12						R12
+ *		->	R3..R0					R3..R0		Block stacked by an exception
+ *
+ *		->	R11..R4					R11..R4
+ *		->	BASEPRI					BASEPRI
+ *		->							S31..S16
+ *		->	LR(R14)					LR(R14)		Block stacked manually
+ *
+ * !!! Do not generate prologue/epilogue sequences
+ *
+ */
+void	EXTI3_IRQHandler(void) __attribute__ ((naked)) __attribute__ ((optimize("Os")));
+void	EXTI3_IRQHandler(void) {
+
+// Interruption ACK
+
+	EXTI->PR |= (1<<BKERNSWIMSG);
+
+// Recover the swi message
+// r0 contains the stack
+
+	__asm__ volatile (
+	"cpsid		i					\n"		//
+	"mrs		r0,psp				\n"		// r0 = stack
+	"add		r1,r0,#36			\n"		// r1 = message address (normal stack frame)
+	"tst		r14,#0x10			\n"		//
+	"it 		eq					\n"		//
+	"addeq		r1,r0,#(36+72)		\n"		// r1 = message address (stack frame with fpu registers)
+	"ldr		r1,[r1]				\n"		// r1 = message
+	"str		r1,%0				\n"		// Save the message on the vKern_message location
+	:
+	: "m" (vKern_message)
+	: KSAVEREGISTERS
+	);
+
+// Save the registers r4..r11 and the basepri
+// r0 contains the stack
+
+	__asm__ volatile (
+	"mrs		r1,basepri			\n"		// r1 = basepri
+	"stmdb 		r0!,{r1,r4-r11}		\n"		// Save the register list
+	"tst		r14,#0x10			\n"		//
+	"it 		eq					\n"		//
+	"vstmdbeq	r0!,{s16-s31}		\n"		// If used, save the fp registers
+	"stmdb 		r0!,{r14}			\n"		// Save the EXCEPTION return
+	"msr		psp,r0				\n"		//
+	"str		r0,%0				\n"		// Save the stack of the old process
+	"cpsie		i					\n"		//
+	:
+	: "m" (vKern_stackProcess)
+	: KSAVEREGISTERS
+	);
+
+// Change the context due to a message
+
+	_newContextMSG();
+
+// Restore the registers r4..r11 and the basepri
+
+	__asm__ volatile (
+	"cpsid		i					\n"		//
+	"ldr		r0,%0				\n"		// Recover the stack of the new process
+	"ldmia		r0!,{r14}			\n"		// Recover the EXCEPTION return
+	"tst		r14,#0x10			\n"		//
+	"it 		eq					\n"		//
+	"vldmiaeq 	r0!,{s16-s31}		\n"		// If used, restore the fp registers
+	"ldmia 		r0!,{r1,r4-r11}		\n"		// Restore the register list
+	"msr		psp,r0				\n"		// New stack
+	"msr		basepri,r1			\n"		// Restore the basepri
+	:
+	: "m" (vKern_stackProcess)
+	: KSAVEREGISTERS
+	);
+
+// Return
+
+	__asm__ volatile (
+	"cpsie		i					\n"		//
+	"dmb							\n"		//
+	"dsb							\n"		//
+	"isb							\n"		//
+	"bx			lr					\n"		// Return
+	);
+}
+
+/*
+ * \brief _newContextMSG
+ *
+ * - Change the context due to a message
+ *   - INT acknowledge and new time for the next process
+ *   - Change the context and prepare the next process
+ *     - Stop time of the process
+ *     - Clear the interruption
+ *     - Disable the timer
+ *     - Change the context
+ *     - Start time of the process
+ *
+ */
+static void	__attribute__ ((noinline))_newContextMSG(void) {
+
+ 	_timeStop();
+	if ((TIM2->SR & TIM_SR_UIF) != 0) {
+		TIM2->SR &= ~TIM_SR_UIF;
+	}
+    TIM2->CR1 &= ~TIM_CR1_CEN;
+
+	sche_callBackTrap(vKern_message);
+	_timeStart();
+
+	#if (defined(__WITHSTAT__))
+	stat_statistic(vKern_backwardProcess, vTimeStart, vTimeStop, vTimeLastStart, vTimeException);
+	vTimeException = 0;
+	#endif
+}
+
+/*
+ * \brief _timeStart
+ *
+ * - Give a new time-stamp (1-us of resolution)
+ *   - 0x0000 to 0xFFFF incremental counter
+ *
+ */
+static	void	_timeStart(void) {
+
+	INTERRUPTION_OFF;
+	vTimeLastStart = vTimeStart;
+	vTimeStart     = TIM3->CNT;
+	INTERRUPTION_RESTORED;
+}
+
+/*
+ * \brief _timeStop
+ *
+ * - Give a new time-stamp (1-us of resolution)
+ *   - 0x0000 to 0xFFFF incremental counter
+ *
+ */
+static	void	_timeStop(void) {
+
+	vTimeStop = TIM3->CNT;
+}
+
+/*
+ * \brief _timeStmp
+ *
+ * - Maintain a 64-bit timer with 1-us of resolution
+ *
+ */
+static	void	_timeStmp(void) {
+			uint16_t	newTime;
+	static	uint16_t	oldTime = 0;
+
+	INTERRUPTION_OFF;
+	newTime = TIM3->CNT;
+	if (newTime < oldTime) {
+		vTiccount += 0x10000;
+	}
+
+	vTiccount = (vTiccount & 0xFFFFFFFFFFFF0000) | newTime;
+	oldTime = newTime;	
+	INTERRUPTION_RESTORED;
+}
+

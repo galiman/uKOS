@@ -1,0 +1,64 @@
+build/py/mpstate.o: ../py/mpstate.c ../py/mpstate.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdint.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/stdint.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_default_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/features.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_newlib_version.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_intsup.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_stdint.h \
+ ../py/mpconfig.h mpconfigport.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/alloca.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/newlib.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/config.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/ieeefp.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/reent.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stddef.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/lock.h \
+ ../py/mpthread.h ../py/misc.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdbool.h \
+ ../py/nlr.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include-fixed/limits.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include-fixed/syslimits.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/limits.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/cdefs.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/setjmp.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/setjmp.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/assert.h \
+ ../py/obj.h ../py/qstr.h build/genhdr/qstrdefs.generated.h \
+ ../py/mpprint.h ../py/objlist.h ../py/objexcept.h ../py/objtuple.h
+../py/mpstate.c ../py/mpstate.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdint.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/stdint.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_default_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/features.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_newlib_version.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_intsup.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_stdint.h :
+ ../py/mpconfig.h mpconfigport.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/alloca.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/newlib.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/config.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/ieeefp.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/reent.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stddef.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/lock.h :
+ ../py/mpthread.h ../py/misc.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdbool.h :
+ ../py/nlr.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include-fixed/limits.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include-fixed/syslimits.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/limits.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/cdefs.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/setjmp.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/setjmp.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/assert.h :
+ ../py/obj.h ../py/qstr.h build/genhdr/qstrdefs.generated.h :
+ ../py/mpprint.h ../py/objlist.h ../py/objexcept.h ../py/objtuple.h :

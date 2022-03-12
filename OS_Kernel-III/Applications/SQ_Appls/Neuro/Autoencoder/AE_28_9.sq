@@ -1,0 +1,519 @@
+
+//------------------------------------------------------------------------
+// Author:	Franzi Edo.	The 2001-02-25
+// Modifs: 
+//
+// SVN:
+// $Author:: efr               $:  Author of last commit
+// $Rev:: 162                  $:  Revision of last commit
+// $Date:: 2017-06-27 17:52:59#$:  Date of last commit		
+//
+// Project:	uKOS
+// Goal:	Auto-encoder NN Back-Prop for 2 layers (1 hidden) full connected networks
+//
+//			i  = inputs vector
+//			W  = weght matrix
+//			Wn = weght (next layer) matrix
+//			p  = activity (potential) vector
+//			o  = output vector
+//			oe = output expected vector
+//			f  = non linear function (tanh or sigmoid)
+//			df = non linear derivative function (tanh or sigmoid)
+//			eq = last layer quadratic error
+//			e  = layer error
+//			en = next layer error
+//			e  = layer error
+//			d  = delta matrix
+//			g  = learning gain
+//
+//			Feedforward equations:
+//
+//			p = W . i
+//			o = f(p)
+//
+//			Backpropagation equations:
+//
+//			Last layer
+//			eq = (oe - o)^2
+//			e  = (oe - o) x df(p)
+//			d  = g .* (e * i')
+//			W  = W + delta
+//
+//			The other layers 
+//			e  = (oe - o) x df(p)
+//			d  = g .* (e * i')
+//			W  = W + delta
+//			e  = Wn * en
+//			d  = g .* (e * i')
+//			W  = W + delta
+//
+//   (c) 1992-2017, Franzi Edo.
+//   --------------------------
+//                                              __ ______  _____
+//   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+//   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+//   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+//                                     \__,_/_/ |_\____//____/
+//   edo.franzi@ukos.ch
+//
+//   This program is free software: you can redistribute it and/or modify
+//   it under the terms of the GNU Affero General Public License as published by
+//   the Free Software Foundation, either version 3 of the License, or
+//   (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+//   GNU Affero General Public License for more details.
+//
+//   You should have received a copy of the GNU Affero General Public License
+//   along with this program. If not, see <http://www.gnu.org/licenses/>.
+//
+//------------------------------------------------------------------------
+
+// Network description
+// -------------------
+
+// Layer 1 (input)
+
+variable L1_input				// Inputs of the layer L1
+variable L1_activity			// Activity of the layer L1
+variable L1_output				// Outputs of the layer L1
+variable L1_weight				// Weights of the layer L1
+variable L1_delta				// Delta weights of the layer L1
+
+// Layer 2 (output)
+
+variable L2_input				// Inputs of the layer L2
+variable L2_activity			// Activity of the layer L2
+variable L2_output				// Outputs of the layer L2
+variable L2_weight				// Weights of the layer L2
+variable L2_delta				// Delta weights of the layer L2
+
+// Databases
+
+variable DB_imageFilename		// Path & filename of the image database
+variable DB_path				// Database & Weight sets path
+
+// NN
+
+variable NN_input				// Image In
+variable NN_output 				// Image Out
+variable NN_error				// Quadratic error of the network
+variable NN_gain				// Learning rate
+variable NN_momentum			// Momentum rate
+variable NN_noise				// Noise rate
+variable NN_epoch				// Nb epoch
+variable NN_stop				// Stop flag
+
+// Prototypes
+// ----------
+
+terminate terminate(L1_weight, L2_weight, DB_path)
+
+init (L1_input, L1_weight, L1_delta, L1_activity, L1_output, ...
+	  L2_input, L2_weight, L2_delta, L2_activity, L2_output, ...
+	  NN_input, NN_output, NN_error, NN_gain, NN_momentum, NN_noise, NN_epoch, NN_stop, ...
+	  DB_imageFilename, DB_path) = init
+
+idle (L1_weight, L1_delta, L1_output, ...
+	  L2_weight, L2_delta, L2_output, ...
+	  NN_input, NN_output, NN_error, NN_epoch, NN_stop) = training(L1_input, L1_weight, L1_delta, L1_activity, L1_output, ...
+														 		   L2_input, L2_weight, L2_delta, L2_activity, L2_output, ...
+																   NN_error, NN_gain, NN_momentum, NN_noise, NN_epoch, NN_stop, ...
+																   DB_imageFilename, DB_path);
+
+figure "Quadratic Errors"
+	draw drawError(NN_error)
+
+figure "Controls"
+	draw drawSlider(NN_gain, NN_momentum, NN_noise)
+	mousedrag(NN_gain, NN_momentum, NN_noise) = dragSlider(NN_gain, NN_momentum, NN_noise, _id, _nb, _ix, _x1)
+
+figure "Image"
+	draw drawInputL1(NN_input)
+
+figure "Encoded - L1"
+	draw drawOutputL1(L1_output)
+
+figure "Decoded - L1"
+	draw drawOutputL2(NN_output)
+
+figure "Features - L1"
+	draw drawFeatureL1(L1_weight)
+
+functions
+{@
+
+define	  KTRUE			= -1;					// True
+define	  KFALSE		= 0;					// False
+define	  KMAXSCROLL	= 100;					// Display 100 epoch before the horizontal scroll
+
+// Network description & Database format
+// =====================================
+
+// Images & compression
+// --------------------
+
+define	  KFOVINL1		= 28;					// Image FOV for the input L1
+define	  KFOVOUL1		= 9;					// Image FOV for the output L1
+define	  KFOVINL2		= KFOVOUL1;				// Image FOV for the input L2
+define	  KFOVOUL2		= KFOVINL1;				// Image FOV for the output L2
+
+// Network description
+// -------------------
+
+define    KL1NBIN		= (KFOVINL1*KFOVINL1);	// Number of inputs (L1)
+define    KL1NBOUT 		= (KFOVOUL1*KFOVOUL1);	// Number of output (L1)
+define    KL2NBIN		= KL1NBOUT;				// Number of inputs (L2)
+define    KL2NBOUT 		= (KFOVOUL2*KFOVOUL2);	// Number of output (L2)
+
+define    KINMOMENTUM 	= 0;					// Initial momentum
+define    KINGAIN 		= 0.0001;				// Initial gain
+define    KMINGAIN 		= 0.00001;				// Minimal gain
+define    KMAXGAIN 		= 0.01;					// Maximum gain
+define    KINNOISE		= 50/100;				// Add some noise to the input vector
+define	  KSZBATCH		= 20;					// Size of the batch for the training
+define	  KNBDBSAMPLES	= 60000;				// Number of samples of the BD
+define	  KNBEPOCH		= 500000;				// Number of backprops (epochs)
+define	  KMAXERROR		= 0.00001;				// Max error. If error < KMAXERROR, then, stop
+
+// Terminate
+// ---------
+
+function terminate(weight_l1, weight_l2, path);
+	(dir, filename, ext) = fileparts(path);
+	fd = fopen([dir, 'WW_file', '.txt'], 'wt');
+
+	fprintf(fd, [repmat('\t%g', 1, size(weight_l1, 2)) '\n'], weight_l1); fprintf(fd,'\n');
+	fprintf(fd, [repmat('\t%g', 1, size(weight_l2, 2)) '\n'], weight_l2); fprintf(fd,'\n');
+	fclose(fd);
+
+// Initialisations
+// ---------------
+
+// Initialise all the vectors to 0
+// Initialise the weights with a random value [-0.5 .. +0.5]
+
+function (input_l1, weight_l1, delta_l1, activity_l1, output_l1, ...
+		  input_l2, weight_l2, delta_l2, activity_l2, output_l2, ...
+		  input, output, error, gain, momentum, noise, epoch, stop, ...
+		  dbImages, path) = init
+
+	subplots(['Quadratic Errors\tControls\nImage\tEncoded - L1\tDecoded - L1\nFeatures - L1']);
+
+    gain	 = KINGAIN;
+    momentum = KINMOMENTUM;
+    noise	 = KINNOISE;
+ 	stop	 = KFALSE;
+	epoch	 = 1;
+
+// Initialise the network
+
+	input_l1  				= zeros(KL1NBIN+1, 1);
+	input_l1(KL1NBIN+1, 1)	= -1;	
+	activity_l1				= zeros(KL1NBOUT, 1);
+	output_l1				= zeros(KL1NBOUT, 1);
+	weight_l1				= (rand(size(output_l1, 1), size(input_l1, 1)) - 0.5) / 100;
+	delta_l1				= zeros(size(output_l1, 1), size(input_l1, 1));
+
+	input_l2 				= zeros(KL2NBIN+1, 1);
+	input_l2(KL2NBIN+1, 1)	= -1;	
+	activity_l2				= zeros(KL2NBOUT, 1);
+	output_l2 				= zeros(KL2NBOUT, 1);
+	weight_l2 				= (rand(size(output_l2, 1), size(input_l2, 1)) - 0.5) / 100;
+	delta_l2				= zeros(size(output_l2, 1), size(input_l2, 1));
+
+	input  					= zeros((KFOVINL1*KFOVINL1), 1);
+	output  				= zeros((KFOVOUL2*KFOVOUL2), 1);
+	error 					= zeros(1, 1);
+
+// Read the Learning & the Verifying data sets (the data have to be reduced and centered)
+// Open the Database files
+
+	path = getfile('Training Data Dase:');
+	if isempty(path)
+		return;
+	end
+
+// Read the Learning & the Verifying data sets
+// Read the weight sets (if the file exist)
+
+	(dir, filename, ext) = fileparts(path);
+	dbImages = [dir, 'NMIST_images', '.b'];
+	fd_w     = fopen([dir, 'WW_file',   '.txt'], 'rt');
+	if fd_w > 0
+		(weight_l1) = _readWeight(fd_w, weight_l1);
+		(weight_l2) = _readWeight(fd_w, weight_l2);
+	end
+	fclose(fd_w);
+
+// - Read the weight sets
+
+function (weight) = _readWeight(fd, weight);
+	for i = 1:size(weight, 1)
+		weight(i, :) = fscanf(fd,'%f');
+	end
+	fscanf(fd,'%f');
+
+// Compute ...
+// ===========
+
+// Training loop
+// -------------
+
+// Compute the network (forward & back propagations)
+// Compute the quadratic error
+// Check the end conditions
+
+function (weight_l1, delta_l1, output_l1, ...
+		  weight_l2, delta_l2, output_l2, ...
+		  input, output, error, epoch, stop) = training(input_l1, weight_l1, delta_l1, activity_l1, output_l1, ...
+									 					input_l2, weight_l2, delta_l2, activity_l2, output_l2, ...
+									 					error, gain, momentum, noise, epoch, stop, ...
+									 					dbImages, path);
+
+	if (stop == KFALSE)
+
+// Compute the network (forward & back propagations)
+// -------------------------------------------------
+
+		quadratic = 0;
+		for i = 1:KSZBATCH
+
+// Random index (for pointing into the database)
+// Compute the network (forward propagation)
+
+			(image, noisyImage) = _readImage(dbImages, noise);
+			input(1:(KFOVINL1*KFOVINL1)) = noisyImage;
+
+			(input_l1, output_l1, activity_l1, ...
+			 input_l2, output_l2, activity_l2) = mlp_forwardPropagation(input, ...
+															 			input_l1, weight_l1, output_l1, ...
+															 			input_l2, weight_l2, output_l2);
+
+			(weight_l1, delta_l1, ...
+			 weight_l2, delta_l2) = mlp_backPropagation(image, gain, momentum, ...
+								     		  			input_l1, weight_l1, delta_l1, activity_l1, output_l1, ...
+								     		  			input_l2, weight_l2, delta_l2, activity_l2, output_l2);
+
+			quadratic = quadratic + mlp_quadraticError(output_l2, image);
+		end
+
+// Display the errors & test the end conditions
+// --------------------------------------------
+
+		quadratic = quadratic / KSZBATCH;
+		sprintf('Epoch = %f, Q-Error Learning = %e\n', epoch, quadratic)
+
+		input           = noisyImage;
+		output          = output_l2;
+		error(1, epoch) = quadratic;
+
+		epoch = epoch + 1;
+
+// Check the end conditions
+
+		if ((quadratic < KMAXERROR) || (epoch >= KNBEPOCH))
+			stop = KTRUE;
+
+// Display the sampling number, the error and save the weight sets
+
+			sprintf('Terminated!\n\n')
+			sprintf('Epoch = %f, Q-Error Learning = %e\n', epoch, quadratic)
+
+			(dir, filename, ext) = fileparts(path);
+			fd = fopen([dir, 'WW_file', '.txt'], 'wt');
+
+			fprintf(fd, [repmat('\t%g', 1, size(weight_l1, 2)) '\n'], weight_l1); fprintf(fd,'\n');
+			fprintf(fd, [repmat('\t%g', 1, size(weight_l2, 2)) '\n'], weight_l2); fprintf(fd,'\n');
+			fclose(fd);
+		end
+	end
+
+// Sliders
+// -------
+
+function drawSlider(gain, momentum, noise);
+	slider(sprintf('Gain: %.2g      \n', gain),      [gain],     [KMINGAIN, KMAXGAIN], '-', '', id=1);
+	slider(sprintf('Momentum: %.2g  \n', momentum),  [momentum], [0,        1],        '-', '', id=2);
+	slider(sprintf('Noise: %.2g %   \n', noise*100), [noise],    [0,        1],        '-', '', id=3);
+
+function (gain, momentum, noise) = dragSlider(gain, momentum, noise, id, nb, ix, x1);
+    if isempty(nb)
+		cancel;
+    end
+	switch id
+		case 1
+			gain = x1;
+		case 2
+			momentum = x1;
+		case 3
+			noise = x1;
+	end
+
+// Errors
+// ------
+
+function drawError(error);
+	i = 1; index = size(error, 2);
+	ix = index;
+	
+	if index > 0
+		if size(error, 2) > KMAXSCROLL
+			i = index - KMAXSCROLL + 1;
+			ix = KMAXSCROLL;
+		end
+
+		x = i:index;
+		y = error(1, i:index);
+
+		dynamic = max(max(error(:, i:index))) * 2;
+		scale([i, index, 0, dynamic]);
+		plot(x, y, 'r');
+	end
+
+// Display the data input
+// ----------------------
+
+function drawInputL1(input);
+	img = reshape(input, sqrt(size(input, 1)), sqrt(size(input, 1)));
+	img = ((img / 2) - 0.5) * -1;
+	image(img);
+
+// Display the data encoded
+// ------------------------
+
+function drawOutputL1(output);
+	img = reshape(output, sqrt(size(output, 1)), sqrt(size(output, 1)));
+	img = ((img / 2) - 0.5) * -1;
+	image(img);
+
+// Display the data decoded
+// ------------------------
+
+function drawOutputL2(output);
+	img = reshape(output, sqrt(size(output, 1)), sqrt(size(output, 1)));
+	img = ((img / 2) - 0.5) * -1;
+	image(img);
+
+// Display the features L1
+// -----------------------
+
+function drawFeatureL1(weight);
+	x = 1;
+	y = 1;
+	fovInputs  = sqrt(size(weight, 2) - 1);
+	fovOutputs = sqrt(size(weight, 1));
+	img = zeros(fovInputs*fovOutputs, fovInputs*fovOutputs);
+	
+	for i = 1:(fovOutputs*fovOutputs)
+		input = weight(i, :);
+		output = input(1:(fovInputs*fovInputs));
+
+		m = min(output);
+		M = max(output);
+		g = 2 / (M - m);
+		c = (M + m) / 2;
+		output = (((output - c) * g) / 2) + 0.5;
+
+		output = reshape(output, fovInputs, fovInputs);
+
+		img(x:x+fovInputs-1, y:y+fovInputs-1) = output;
+		y = y + fovInputs;
+		if y > (fovInputs*fovOutputs)
+			x = x + fovInputs;
+			y = 1;
+		end
+	end
+
+	image(img);
+
+// Generic routines
+// ================
+
+// Read a noisy image from the database
+// ------------------------------------
+
+function (image, noisyImage) = _readImage(dbImages, noise);
+	index = 1 + floor((KNBDBSAMPLES - 1) * rand);
+
+	fd = fopen(dbImages, 'r');
+	fseek(fd, 16+(index*KFOVINL1*KFOVINL1));
+	(image, count) = fread(fd, KFOVINL1*KFOVINL1);
+
+	image      = ((image / 255) - 0.5) * 2;
+	delta      = randn(KFOVINL1*KFOVINL1, 1);
+	delta	   = delta / max(delta);
+
+	noisyImage = image + (delta * noise);
+
+//	noisyImage = image + ((randn(KFOVINL1*KFOVINL1, 1) - 0.5) * 2 * noise);
+
+	m = min(noisyImage);
+	M = max(noisyImage);
+	g = 2 / (M - m);
+	c = (M + m) / 2;
+	noisyImage = (noisyImage - c) * g;
+
+	fclose(fd);
+
+// MLP specific routines
+// =====================
+
+// Compute the full MLP forward propagation
+// ----------------------------------------
+
+function (input_l1, output_l1, activity_l1, ...
+		  input_l2, output_l2, activity_l2) = mlp_forwardPropagation(data, ...
+													 			 	 input_l1, weight_l1, output_l1, ...
+													 			 	 input_l2, weight_l2, output_l2);
+
+	(input_l1, output_l1, activity_l1) = _layer(input_l1, weight_l1, data);
+	(input_l2, output_l2, activity_l2) = _layer(input_l2, weight_l2, output_l1);
+
+// Compute the full MLP back propagation
+// -------------------------------------
+
+function (weight_l1, delta_l1, ...
+		  weight_l2, delta_l2) = mlp_backPropagation(expected, gain, momentum, ...
+										   			 input_l1, weight_l1, delta_l1, activity_l1, output_l1, ...
+										   			 input_l2, weight_l2, delta_l2, activity_l2, output_l2);
+
+	error_l2  = (expected - output_l2)         .* _d_neuron_A(activity_l2);
+	error_l1  = weight_l2' * error_l2;  
+	error_l1  = error_l1(1:size(output_l1, 1)) .* _d_neuron_A(activity_l1);
+
+	delta_l2  = gain .* (error_l2 * input_l2') + momentum .* delta_l2;
+	delta_l1  = gain .* (error_l1 * input_l1') + momentum .* delta_l1;
+
+	weight_l2 = weight_l2 + delta_l2;
+	weight_l1 = weight_l1 + delta_l1;
+
+// Compute the full MLP quadratic error
+// ------------------------------------
+
+function (quadratic) = mlp_quadraticError(output, expected);
+	quadratic = 0;
+	for i = 1:size(output, 1)
+		quadratic = quadratic + ((expected(i, 1) - output(i, 1))^2) / (2 * size(output, 1));
+	end
+
+// - Compute the a NN layer
+
+function (input, output, activity) = _layer(input, weight, data);
+	input(1:size(input, 1)-1, 1) = data;
+	activity                     = weight * input;
+	output                       = _neuron_A(activity);
+
+// - Compute the neuron function y = tanh(x)
+
+function (output) = _neuron_A(activity);
+	output = tanh(activity);
+
+// - Compute the dy/dx of the neuron function
+
+function (output) = _d_neuron_A(activity);
+	output = (1 - tanh(activity)) .* (1 + tanh(activity));
+
+@}

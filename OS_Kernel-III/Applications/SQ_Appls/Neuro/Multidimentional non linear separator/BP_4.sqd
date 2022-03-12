@@ -1,0 +1,22 @@
+%SQ BP_4.sq
+
+DB_path = '/Users/efr/DATA/DATA_Private/uKOS_Project/uKOS_Soft/OS_Kernel-III/Applications/SQ_Appls/Neuro/Multidimentional non linear separator/DB_V_file.txt';
+NN_gain = 1e-4;
+NN_momentum = 1e-3;
+NN_noise = 1e-3;
+NN_epoch = 2;
+NN_stop = 0;
+_plots = 'Quadratic Errors (Learning & Verifying)\nErrors per sample\nControls\nFunction output - expected';
+_plotprops = [];
+_plot3d = [];
+_plotsync = [];
+_plotpos = [0,63,0,23
+0,63,23.75,47.75
+0,62.5,50.5,62.375
+65,146,0.5,65.5];
+_plotspring = [];
+_plotparam = {[],
+[],
+[],
+[]};
+_winsize = [1102,543];

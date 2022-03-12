@@ -1,0 +1,54 @@
+build/py/emitcommon.o: ../py/emitcommon.c \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/assert.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/newlib.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/config.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/ieeefp.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/features.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_newlib_version.h \
+ ../py/emit.h ../py/lexer.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdint.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/stdint.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_default_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_intsup.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_stdint.h \
+ ../py/mpconfig.h mpconfigport.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/alloca.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/reent.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stddef.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_types.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/lock.h \
+ ../py/qstr.h ../py/misc.h \
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdbool.h \
+ build/genhdr/qstrdefs.generated.h ../py/reader.h ../py/obj.h \
+ ../py/mpprint.h ../py/scope.h ../py/parse.h ../py/emitglue.h \
+ ../py/runtime0.h
+../py/emitcommon.c :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/assert.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/newlib.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/config.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/ieeefp.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/features.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_newlib_version.h :
+ ../py/emit.h ../py/lexer.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdint.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/stdint.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_default_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_intsup.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_stdint.h :
+ ../py/mpconfig.h mpconfigport.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/alloca.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/reent.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/_ansi.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stddef.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/machine/_types.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/arm-none-eabi/sys-include/sys/lock.h :
+ ../py/qstr.h ../py/misc.h :
+ /opt/uKOS/cross/gcc-7.1.0/arm/lib/gcc/arm-none-eabi/7.1.0/include/stdbool.h :
+ build/genhdr/qstrdefs.generated.h ../py/reader.h ../py/obj.h :
+ ../py/mpprint.h ../py/scope.h ../py/parse.h ../py/emitglue.h :
+ ../py/runtime0.h :

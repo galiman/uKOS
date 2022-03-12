@@ -1,0 +1,184 @@
+
+//------------------------------------------------------------------------
+// Author:	Franzi Edo.	The 2014-01-01
+// Modifs:
+//
+// SVN:
+// $Author:: efr               $:  Author of last commit
+// $Rev:: 161                  $:  Revision of last commit
+// $Date:: 2017-06-15 15:01:25#$:  Date of last commit		
+//
+// Project:	uKOS
+// Goal:	Read a 128 element vector (temperature).
+//			Display the temperature vector
+//			Display the FFT of the temperature vector
+//
+//   (c) 1992-2017, Franzi Edo.
+//   --------------------------
+//                                              __ ______  _____
+//   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+//   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+//   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+//                                     \__,_/_/ |_\____//____/
+//   edo.franzi@ukos.ch
+//
+//   This program is free software: you can redistribute it and/or modify
+//   it under the terms of the GNU Affero General Public License as published by
+//   the Free Software Foundation, either version 3 of the License, or
+//   (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+//   GNU Affero General Public License for more details.
+//
+//   You should have received a copy of the GNU Affero General Public License
+//   along with this program. If not, see <http://www.gnu.org/licenses/>.
+//
+//------------------------------------------------------------------------
+
+title "Temperature analysis"
+
+version
+{@
+Version 1.0, 01 January 2014
+
+Copyright 2017, uKOS www.ukos.ch
+@}
+
+help
+{@
+This SQ file allows to display the temperature vector.
+
+1. Connect the board to the USB port of your computer
+
+2. Be sure that the USB port is not already in use
+
+3. Launch the Sysquake executable X.sqd
+
+Important: do not change the device selection while the application is
+running. Before removing the USB cable, it is mandatory to quit Sysquake
+or any applications having the control of the USB port!
+
+@}
+
+extension "serialdev"
+
+variable	fd, devList, devIndex
+variable	temperature
+
+init        (devList, devIndex) = initDevList
+init		(fd) = init(devList, devIndex)
+
+idle		(temperature) = acquisition(fd)
+
+terminate	terminate(fd)
+beforedump  terminate(fd)
+
+figure "Temperature"
+	draw drawTemperature(temperature)
+
+figure "FFT"
+	draw drawFFT(temperature)
+
+restore     (devList, devIndex) = initDevList
+restore		(fd) = init(devList, devIndex)
+
+functions
+{@
+
+define	KNBSAMPLES		= 128					// Number of samples
+define	KNBSAMPLESP2	= 128					// Number of samples (upper pow of 2)
+define	KFS				= 5						// Sampling frequency (5-Hz)
+define	KTS				= 1/KFS					// Sampling time (200-ms)
+
+// Looking for a uKOS device (standard console on the device C)
+// ------------------------------------------------------------
+
+function (devList, devIndex) = initDevList
+	devList = serialdevname;
+	devList = devList(cellfun(@(name) ~isempty(strfind(name, 'usbserial')), devList));
+
+	devIndex = find(cellfun(@(name) name(end) == 'C', devList));
+	if ~isempty(devIndex)
+		devIndex = devIndex(1);
+	end
+
+// Initialisations
+// ---------------
+
+function (fd) = init(devList, devIndex)
+	fd = serialdevopen(devList{devIndex}, serialdevset('BPS', 460800, 'TextMode', true, 'Timeout', 10));
+	fflush(fd);
+
+	subplots(['Temperature\nFFT']);
+
+// Terminate
+// ---------
+
+// Before closing the channel, be sure
+// that it is empty!!
+// This workaround read the channel under timeout
+// When the timeout occurs, we can close the channel.
+
+function terminate(fd)
+	try
+		while true
+			dummy = fread(fd, 1000, '*uint8');
+		end
+	end
+	fflush(fd);
+	fclose(fd);
+
+// Compute ...
+// ===========
+
+// acquisition loop
+// ----------------
+
+function (temperature) = acquisition(fd)
+	fflush(fd);
+
+// Asking for the data (temperature)
+
+	fprintf(fd, 'X\n');
+	answer = fgetl(fd);
+	line = sscanf(answer,'x,%s');
+	vector = sscanf(line,'%d,');
+
+// Correct the temperature
+
+	temperature = (vector'/100);
+
+// Display the temperature
+// -----------------------
+
+function drawTemperature(temperature)
+	m = min(temperature);
+	M = max(temperature);
+	scale([0, KNBSAMPLES, 15, 30]);
+	plot(temperature);
+	label Sample Degrees;
+
+// Display the FFT
+// ---------------
+
+function drawFFT(temperature)
+	frequency = (KFS/2)*linspace(0, 1, (KNBSAMPLESP2/2)+1);
+	amplitude = fft(temperature, KNBSAMPLESP2)/KNBSAMPLES;
+	amplitude = abs(amplitude(1:(KNBSAMPLESP2/2)+1));
+
+// DC component
+// fo of the signal
+
+	DC = amplitude(1)
+	amplitude(1) = 0;
+
+	[v, ifo] = max(amplitude);
+	fnyquist = (KFS/2);
+	fo = (fnyquist/(KNBSAMPLES/2))*(ifo-1)
+	
+	plot(frequency, (2*amplitude));
+	label f-[Hz] |A|;
+
+@}

@@ -1,0 +1,119 @@
+/*
+; model_copy.
+; ===========
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.	The 2016-08-09
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 184                  $:  Revision of last commit
+; $Date:: 2017-07-17 10:50:19#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		Fast copy of memory blocs.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+/*
+ * \brief copy_fastCopy
+ *
+ * - Fast copy
+ *
+ */
+int32_t	copy_fastCopy(const void *source, void *destination, uint32_t size) {
+			uint32_t	number, remind;
+			uint8_t		*dst8;
+			uint32_t	*dst32;
+	const	uint8_t		*src8;
+	const	uint32_t	*src32;
+
+	if (((uint32_t)source & 0x3) || ((uint32_t)destination & 0x3)) {
+
+// Not 32-bit aligned -> 8-bit copy
+// Copy blocs of 8 x 8-bits
+
+		number = size / 8;
+		remind = size % 8;
+		src8   = (const uint8_t *)source;
+		dst8   = (uint8_t *)destination;
+
+		while (number > 0) {
+			*dst8++ = *src8++;
+			*dst8++ = *src8++;
+			*dst8++ = *src8++;
+			*dst8++ = *src8++;
+			*dst8++ = *src8++;
+			*dst8++ = *src8++;
+			*dst8++ = *src8++;
+			*dst8++ = *src8++;
+			number--;
+		}
+	} else {
+
+// 32-bit aligned -> 32-bit copy
+// Copy blocs of 2 x 32-bits
+		
+		number = size / (2*4);
+		remind = size % (2*4);
+		src32  = (const uint32_t *)source;
+		dst32  = (uint32_t *)destination;
+	
+		while (number > 0) {
+			*dst32++ = *src32++;
+			*dst32++ = *src32++;
+			number--;
+		}
+		src8 = (const uint8_t *)src32;
+		dst8 = (uint8_t *)dst32;
+	}
+
+// Copy a possible reminder in blocs of 8-bits
+// Useage of the magic world /* FALLTHROUGH */
+// to suppress the fall through warnings
+
+	switch (remind) {
+		case 7: *dst8++ = *src8++;
+		/* FALLTHROUGH */
+		case 6: *dst8++ = *src8++;
+		/* FALLTHROUGH */
+		case 5: *dst8++ = *src8++;
+		/* FALLTHROUGH */
+		case 4: *dst8++ = *src8++;
+		/* FALLTHROUGH */
+		case 3: *dst8++ = *src8++;
+		/* FALLTHROUGH */
+		case 2: *dst8++ = *src8++;
+		/* FALLTHROUGH */
+		case 1: *dst8++ = *src8++;
+		/* FALLTHROUGH */
+		case 0:
+		default: break;
+	}
+	return (KCOPYNOERR);
+}
+

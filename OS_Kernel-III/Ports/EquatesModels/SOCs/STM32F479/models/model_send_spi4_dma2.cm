@@ -1,0 +1,239 @@
+/*
+; model_send_spi4_dma2.
+; =====================
+
+;------------------------------------------------------------------------
+; Author:	Franzi Edo.		The 2006-06-28
+; Modifs:
+;
+; SVN:
+; $Author:: efr               $:  Author of last commit
+; $Rev:: 166                  $:  Revision of last commit
+; $Date:: 2017-07-02 17:51:46#$:  Date of last commit
+;
+; Project:	uKOS
+; Goal:		stub for the "send" manager module.
+;			Idea, concept and original implementation by Nussbaum Pascal.
+;
+;   (c) 1992-2017, Franzi Edo.
+;   --------------------------
+;                                              __ ______  _____
+;   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+;   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+;   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+;                                     \__,_/_/ |_\____//____/
+;   edo.franzi@ukos.ch
+;
+;   This program is free software: you can redistribute it and/or modify
+;   it under the terms of the GNU Affero General Public License as published by
+;   the Free Software Foundation, either version 3 of the License, or
+;   (at your option) any later version.
+;
+;   This program is distributed in the hope that it will be useful,
+;   but WITHOUT ANY WARRANTY; without even the implied warranty of
+;   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;   GNU Affero General Public License for more details.
+;
+;   You should have received a copy of the GNU Affero General Public License
+;   along with this program. If not, see <http://www.gnu.org/licenses/>.
+;
+;------------------------------------------------------------------------
+*/
+
+extern				void		(*vExce_indIntVectors[KNBINTERRUPTIONS])(void);
+extern	volatile	uint16_t	vTimeException;
+static				void		(*vEndXferCodeRoutine)(void) = NULL;
+static	volatile	uint8_t		*vXferBuffer                 = NULL;
+static	volatile	uint8_t 	*vPacket;
+static	volatile	uint32_t	vPacketSize;
+static	volatile	uint32_t	vNbPackets;
+
+// Prototypes
+// ==========
+
+static	void	_initSPI4(void);
+static	void	_initDMA2(void);
+static	void	aDMA2_Stream4_IRQHandler(void);
+
+/*
+ * \brief send_init
+ *
+ * - Initialize the manager
+ *
+ */
+void	send_init(void) {
+
+// Initialize the used interfaces
+
+	_initSPI4();
+	_initDMA2();
+}
+
+/*
+ * \brief send_configure
+ *
+ * - Configure the manager
+ *
+ */
+int32_t	send_configure(const cnfSend_t *configure) {
+
+	vPacketSize = configure->oPacketSize;
+	vNbPackets  = configure->oNbPackets;
+	vXferBuffer = (volatile uint8_t *)configure->oXferBuffer;
+
+	vEndXferCodeRoutine = configure->oEndXfer;
+	vPacket 			= vXferBuffer;
+	return (KSENDNOERR);
+}
+
+/*
+ * \brief send_setXferBuffer
+ *
+ * - Set the new transfer buffer
+ *
+ */
+int32_t	send_setXferBuffer(void *xferBuffer) {
+
+	vXferBuffer = (volatile uint8_t *)xferBuffer;
+	return (KSENDNOERR);
+}
+
+/*
+ * \brief send_startXfer
+ *
+ * - Start the transfer
+ *
+ */
+int32_t	send_startXfer(void) {
+
+	DMA2_Stream4->M0AR  = (uint32_t)vPacket;
+	DMA2_Stream4->NDTR  = vPacketSize/2;
+	DMA2_Stream4->CR   |= DMA_SxCR_EN;
+	return (KSENDNOERR);
+}
+
+/*
+ * \brief send_stopXfer
+ *
+ * - Stop the transfer
+ *
+ */
+int32_t	send_stopXfer(void) {
+
+	DMA2_Stream4->CR &= ~DMA_SxCR_EN;
+	return (KSENDNOERR);
+}
+
+// Local routines
+// ==============
+
+/*
+ * \brief _initSPI4
+ *
+ * - Initialize the spi4
+ *
+ */
+static	void	_initSPI4(void) {
+
+	RCC->APB2ENR |= RCC_APB2ENR_SPI4EN;
+
+// Initialize the spi4
+//
+// 16-bit transfers
+// PHA 1
+// Enable DMA feeding of tx data
+
+	SPI4->CR1 = 0;
+	SPI4->CR1 = SPI_CR1_DFF
+			  | SPI_CR1_CPHA;
+
+	SPI4->CR2  = SPI_CR2_TXDMAEN;
+	SPI4->CR1 |= SPI_CR1_SPE;
+}
+
+/*
+ * \brief _initDMA2
+ *
+ * - Initialize the DMA2 stream 4 for the SPI transfer
+ *
+ */
+static	void	_initDMA2(void) {
+
+	RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;
+
+	vExce_indIntVectors[DMA2_Stream4_IRQn] 	= aDMA2_Stream4_IRQHandler;
+	NVIC->IP[DMA2_Stream4_IRQn]				= (KINT_LEVEL_PERIPH<<4);
+	NVIC->ISER[1]						   |= (1<<(DMA2_Stream4_IRQn & 0x1F));
+
+// Stream 4 SPI4 transfer
+//
+// Direct mode disable
+// FIFO full
+// Select the channel 5 (stream 4)
+// Priority very high
+// Memory size 32-bits
+// Peripheral size 16-bits
+// Memory auto incremented
+// Transfer complete interruption
+// Read burst of 4 x 32-bits
+
+	DMA2_Stream4->CR   = 0x00000000;
+	DMA2_Stream4->PAR  = (uint32_t)(SPI4_BASE+0x0C);
+	DMA2_Stream4->M0AR = (uint32_t)vPacket;
+	DMA2_Stream4->NDTR = vPacketSize/2;
+	DMA2_Stream4->FCR  = DMA_SxFCR_DMDIS
+					   | DMA_SxFCR_FTH_1
+					   | DMA_SxFCR_FTH_0;
+
+	DMA2_Stream4->CR = DMA_SxCR_CHSEL_2
+					 | DMA_SxCR_CHSEL_0
+					 | DMA_SxCR_PL_1
+					 | DMA_SxCR_PL_0
+					 | DMA_SxCR_MSIZE_1
+					 | DMA_SxCR_PSIZE_0										
+					 | DMA_SxCR_MINC
+					 | DMA_SxCR_DIR_0
+					 | DMA_SxCR_TCIE
+					 | DMA_SxCR_MBURST_0;
+
+	DMA2->HIFCR = DMA_HIFCR_CTCIF4
+				| DMA_HIFCR_CHTIF4
+				| DMA_HIFCR_CTEIF4
+				| DMA_HIFCR_CDMEIF4
+				| DMA_HIFCR_CFEIF4;
+}
+
+/*
+ * \brief aDMA2_Stream4_IRQHandler
+ *
+ * - DMA interruption
+ *
+ */
+static	void	aDMA2_Stream4_IRQHandler(void) {
+			void		(*go)(void);
+	static	uint32_t	cptPack = 0;
+
+	DMA2->HIFCR = DMA_HIFCR_CTCIF4;
+
+	vPacket += vPacketSize;
+	++cptPack;
+
+// Last packet
+
+	if (cptPack == vNbPackets) {
+		if (vEndXferCodeRoutine != NULL) {											
+			go = vEndXferCodeRoutine;
+			go();
+		}																		
+		vPacket = vXferBuffer;
+		cptPack = 0;
+	}
+
+// Normal packet or end
+
+	DMA2_Stream4->M0AR  = (uint32_t)vPacket;
+	DMA2_Stream4->CR   |= DMA_SxCR_EN;
+
+	PREEMPTION;
+}
+

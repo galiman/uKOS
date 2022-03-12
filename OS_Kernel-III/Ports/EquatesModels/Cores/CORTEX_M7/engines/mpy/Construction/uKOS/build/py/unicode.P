@@ -1,0 +1,44 @@
+build/py/unicode.o: ../py/unicode.c \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/lib/gcc/arm-none-eabi/6.3.1/include/stdint.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/stdint.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/machine/_default_types.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/features.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/_newlib_version.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/_intsup.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/_stdint.h \
+ ../py/unicode.h ../py/mpconfig.h mpconfigport.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/alloca.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/_ansi.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/newlib.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/config.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/machine/ieeefp.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/reent.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/_ansi.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/lib/gcc/arm-none-eabi/6.3.1/include/stddef.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/_types.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/machine/_types.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/lock.h \
+ ../py/misc.h \
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/lib/gcc/arm-none-eabi/6.3.1/include/stdbool.h
+../py/unicode.c :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/lib/gcc/arm-none-eabi/6.3.1/include/stdint.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/stdint.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/machine/_default_types.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/features.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/_newlib_version.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/_intsup.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/_stdint.h :
+ ../py/unicode.h ../py/mpconfig.h mpconfigport.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/alloca.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/_ansi.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/newlib.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/config.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/machine/ieeefp.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/reent.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/_ansi.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/lib/gcc/arm-none-eabi/6.3.1/include/stddef.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/_types.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/machine/_types.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/arm-none-eabi/include/sys/lock.h :
+ ../py/misc.h :
+ /opt/uKOS/cross/gcc-M7-6.3.1/arm/lib/gcc/arm-none-eabi/6.3.1/include/stdbool.h :

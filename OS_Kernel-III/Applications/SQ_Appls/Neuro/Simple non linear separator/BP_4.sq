@@ -1,0 +1,622 @@
+
+//------------------------------------------------------------------------
+// Author:	Franzi Edo.	The 2001-02-25
+// Modifs: 
+//
+// SVN:
+// $Author:: efr               $:  Author of last commit
+// $Rev:: 162                  $:  Revision of last commit
+// $Date:: 2017-06-27 17:52:59#$:  Date of last commit		
+//
+// Project:	uKOS
+// Goal:	NN Back-Prop for 4 layers (2 hidden) full connected networks
+//
+//			i  = inputs vector
+//			W  = weght matrix
+//			Wn = weght (next layer) matrix
+//			p  = activity (potential) vector
+//			o  = output vector
+//			oe = output expected vector
+//			f  = non linear function (tanh or sigmoid)
+//			df = non linear derivative function (tanh or sigmoid)
+//			eq = last layer quadratic error
+//			e  = layer error
+//			en = next layer error
+//			e  = layer error
+//			d  = delta matrix
+//			g  = learning gain
+//
+//			Feedforward equations:
+//
+//			p = W . i
+//			o = f(p)
+//
+//			Backpropagation equations:
+//
+//			Last layer
+//			eq = (oe - o)^2
+//			e  = (oe - o) x df(p)
+//			d  = g .* (e * i')
+//			W  = W + delta
+//
+//			The other layers 
+//			e  = (oe - o) x df(p)
+//			d  = g .* (e * i')
+//			W  = W + delta
+//			e  = Wn * en
+//			d  = g .* (e * i')
+//			W  = W + delta
+//
+//   (c) 1992-2017, Franzi Edo.
+//   --------------------------
+//                                              __ ______  _____
+//   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+//   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+//   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+//                                     \__,_/_/ |_\____//____/
+//   edo.franzi@ukos.ch
+//
+//   This program is free software: you can redistribute it and/or modify
+//   it under the terms of the GNU Affero General Public License as published by
+//   the Free Software Foundation, either version 3 of the License, or
+//   (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+//   GNU Affero General Public License for more details.
+//
+//   You should have received a copy of the GNU Affero General Public License
+//   along with this program. If not, see <http://www.gnu.org/licenses/>.
+//
+//------------------------------------------------------------------------
+
+// Network description
+// -------------------
+
+// Layer 1 (input)
+
+variable L1_input				// Inputs of the layer L1
+variable L1_activity			// Activity of the layer L1
+variable L1_output				// Outputs of the layer L1
+variable L1_weight				// Weights of the layer L1
+variable L1_delta				// Delta weights of the layer L1
+
+// Layer 2 (hidden)
+
+variable L2_input				// Inputs of the layer L2
+variable L2_activity			// Activity of the layer L2
+variable L2_output				// Outputs of the layer L2
+variable L2_weight				// Weights of the layer L2
+variable L2_delta				// Delta weights of the layer L2
+
+// Layer 3 (hidden)
+
+variable L3_input				// Inputs of the layer L3
+variable L3_activity			// Activity of the layer L3
+variable L3_output				// Outputs of the layer L3
+variable L3_weight				// Weights of the layer L3
+variable L3_delta				// Delta weights of the layer L3
+
+// Layer 4 (output)
+
+variable L4_input				// Inputs of the layer L4
+variable L4_activity			// Activity of the layer L4
+variable L4_output				// Outputs of the layer L4
+variable L4_weight				// Weights of the layer L4
+variable L4_delta				// Delta weights of the layer L4
+
+// Databases
+
+variable DB_input_L				// Inputs vector (Learning)
+variable DB_expected_L			// Expected vector (Learning)
+variable DB_input_V				// Inputs vector (Verifying)
+variable DB_expected_V			// Expected vector (Verifying)
+variable DB_path				// Database & Weight sets path
+
+// NN
+
+variable NN_errorPerSample		// Error per sample
+variable NN_error				// Quadratic error of the network
+variable NN_display				// Output for display (1: output, 2: expected))
+variable NN_gain				// Learning rate
+variable NN_momentum			// Momentum rate
+variable NN_noise				// Noise rate
+variable NN_epoch				// Nb epoch
+variable NN_stop				// Stop flag
+
+// Prototypes
+// ----------
+
+terminate terminate(L1_weight, L2_weight, L3_weight, L4_weight, DB_path)
+
+init (L1_input, L1_weight, L1_delta, L1_activity, L1_output, ...
+	  L2_input, L2_weight, L2_delta, L2_activity, L2_output, ...
+	  L3_input, L3_weight, L3_delta, L3_activity, L3_output, ...
+	  L4_input, L4_weight, L4_delta, L4_activity, L4_output, ...
+	  NN_display, NN_error, NN_errorPerSample, ...
+	  DB_input_L, DB_expected_L, DB_input_V, DB_expected_V, DB_path, ...
+	  NN_gain, NN_momentum, NN_noise, NN_epoch, NN_stop) = init
+
+idle (L1_weight, L1_delta, ...
+	  L2_weight, L2_delta, ...
+	  L3_weight, L3_delta, ...
+	  L4_weight, L4_delta, L4_output, ...
+	  NN_display, NN_error, NN_errorPerSample, ...
+	  NN_epoch, NN_stop) = training(L1_input, L1_weight, L1_delta, L1_activity, L1_output, ...
+									L2_input, L2_weight, L2_delta, L2_activity, L2_output, ...
+									L3_input, L3_weight, L3_delta, L3_activity, L3_output, ...
+									L4_input, L4_weight, L4_delta, L4_activity, L4_output, ...
+									DB_input_L, DB_expected_L, DB_input_V, DB_expected_V, DB_path, ...
+									NN_display, NN_error, NN_errorPerSample, NN_gain, NN_momentum, NN_noise, NN_epoch, NN_stop);
+
+figure "Controls"
+	draw drawSlider( NN_gain, NN_momentum, NN_noise)
+	mousedrag( NN_gain, NN_momentum, NN_noise) = dragSlider( NN_gain, NN_momentum, NN_noise, _id, _nb, _ix, _x1)
+
+figure "Quadratic Errors (Learning & Verifying)"
+	draw drawError(NN_error)
+
+figure "Errors per sample"
+	draw drawErrorPerSample(NN_errorPerSample)
+
+figure "Function output - expected"
+	draw output(NN_display)
+
+functions
+{@
+
+define	  KTRUE			= -1;			// True
+define	  KFALSE		= 0;			// False
+define	  KMAXSCROLL	= 100;			// Display 100 epoch before the horizontal scroll
+
+// Network description & Database format
+// =====================================
+//
+// The file format of the database is the following one:
+//
+// in1_M	in_2	in_3	in_n	out_1	ont_2	out_n
+//
+// in1_M	Monotonic input (-1..+1) distributed over all the database. This input is not modified by a random noise
+// in_2..n	Reduced end centered input data (-1..+1). These inputs could be modified by a random noise
+// out_1..n	Reduced end centered expected output (-1..+1)
+
+// Database format
+// ---------------
+
+define    KMONOTONIC	= KFALSE;		// The in1_M is monotonic. Do not add noise to this input
+define    KPOSIN1		= 1;			// Position of the in_1..
+define    KPOSINN		= 2;			// Position of the in_n..
+define    KPOSOUT1		= 3;			// Position of the out_1..
+define    KPOSOUTN		= 4;			// Position of the out_n..
+
+// Network description
+// -------------------
+
+define    KL1NBIN		= 2;			// Number of inputs (L1)
+define    KL1NBOUT 		= 50;			// Number of output (L1)
+define    KL2NBIN		= KL1NBOUT;		// Number of inputs (L2)
+define    KL2NBOUT 		= 45;			// Number of output (L2)
+define    KL3NBIN		= KL2NBOUT;		// Number of inputs (L3)
+define    KL3NBOUT 		= 15;			// Number of output (L3)
+define    KL4NBIN		= KL3NBOUT;		// Number of inputs (L4)
+define    KL4NBOUT 		= 2;			// Number of output (L4)
+define    KINMOMENTUM 	= 0.9;			// Initial momentum
+define    KINGAIN 		= 0.0001;		// Initial gain
+define    KMINGAIN 		= 0.00001;		// Minimal gain
+define    KMAXGAIN 		= 0.001;		// Maximum gain
+define    KINNOISE		= 0/100;		// Add some noise to the input vector
+define	  KNBDBSAMPLES	= 800;			// Number of samples of the BD
+define	  KNBEPOCH		= 500000;		// Number of backprops (epochs)
+define	  KMAXERROR		= 0.00001;		// Max error. If error < KMAXERROR, then, stop
+
+// Terminate
+// ---------
+
+function terminate(weight_l1, weight_l2, weight_l3, weight_l4, path);
+	(dir, filename, ext) = fileparts(path);
+	fd = fopen([dir, 'WW_file', '.txt'], 'wt');
+
+	fprintf(fd, [repmat('\t%g', 1, size(weight_l1, 2)) '\n'], weight_l1); fprintf(fd,'\n');
+	fprintf(fd, [repmat('\t%g', 1, size(weight_l2, 2)) '\n'], weight_l2); fprintf(fd,'\n');
+	fprintf(fd, [repmat('\t%g', 1, size(weight_l3, 2)) '\n'], weight_l3); fprintf(fd,'\n');
+	fprintf(fd, [repmat('\t%g', 1, size(weight_l4, 2)) '\n'], weight_l4); fprintf(fd,'\n');
+	fclose(fd);
+
+// Initialisations
+// ---------------
+
+// Initialise all the vectors to 0
+// Initialise the weights with a random value [-0.5 .. +0.5]
+// Read the training sets (the Learning and the Testing)
+
+function (input_l1, weight_l1, delta_l1, activity_l1, output_l1, ...
+		  input_l2, weight_l2, delta_l2, activity_l2, output_l2, ...
+		  input_l3, weight_l3, delta_l3, activity_l3, output_l3, ...
+		  input_l4, weight_l4, delta_l4, activity_l4, output_l4, ...
+		  display, error, errorPerSample, ...
+		  input_l, expected_l, input_v, expected_v, path, ...
+		  gain, momentum, noise, epoch, stop) = init
+
+	subplots(['Quadratic Errors (Learning & Verifying)\nFunction output - expected\nErrors per sample\nControls']);
+
+ 	stop	 = KFALSE;
+    gain	 = KINGAIN;
+    momentum = KINMOMENTUM;
+    noise	 = KINNOISE;
+	epoch    = 1;
+
+// Initialise the network
+
+	input_l1  				= zeros(KL1NBIN+1, 1);
+	input_l1(KL1NBIN+1, 1)	= -1;	
+	activity_l1				= zeros(KL1NBOUT, 1);
+	output_l1				= zeros(KL1NBOUT, 1);
+	weight_l1				= (rand(size(output_l1, 1), size(input_l1, 1)) - 0.5);
+	delta_l1				= zeros(size(output_l1, 1), size(input_l1, 1));
+
+	input_l2 				= zeros(KL2NBIN+1, 1);
+	input_l2(KL2NBIN+1, 1)	= -1;	
+	activity_l2				= zeros(KL2NBOUT, 1);
+	output_l2 				= zeros(KL2NBOUT, 1);
+	weight_l2 				= (rand(size(output_l2, 1), size(input_l2, 1)) - 0.5);
+	delta_l2				= zeros(size(output_l2, 1), size(input_l2, 1));
+
+	input_l3 				= zeros(KL3NBIN+1, 1);
+	input_l3(KL3NBIN+1, 1)	= -1;	
+	activity_l3				= zeros(KL3NBOUT, 1);
+	output_l3 				= zeros(KL3NBOUT, 1);
+	weight_l3 				= (rand(size(output_l3, 1), size(input_l3, 1)) - 0.5);
+	delta_l3				= zeros(size(output_l3, 1), size(input_l3, 1));
+
+	input_l4 				= zeros(KL4NBIN+1, 1);
+	input_l4(KL4NBIN+1, 1)	= -1;	
+	activity_l4				= zeros(KL4NBOUT, 1);
+	output_l4 				= zeros(KL4NBOUT, 1);
+	weight_l4 				= (rand(size(output_l4, 1), size(input_l4, 1)) - 0.5);
+	delta_l4				= zeros(size(output_l4, 1), size(input_l4, 1));
+
+	display					= zeros(4, KNBDBSAMPLES);
+	error 					= zeros(2, 1);
+	errorPerSample			= zeros(KL4NBOUT, KNBDBSAMPLES);
+
+// Read the Learning & the Verifying data sets (the data have to be reduced and centered)
+// Open the Database files
+
+	path = getfile('Training Data Dase:');
+	if isempty(path)
+		return;
+	end
+
+// Read the Learning & the Verifying data sets
+// Read the weight sets (if the file exist)
+
+	(dir, filename, ext) = fileparts(path);
+	fd_l = fopen([dir, 'DB_L_file', '.txt'], 'rt');
+	fd_v = fopen([dir, 'DB_V_file', '.txt'], 'rt');
+	fd_w = fopen([dir, 'WW_file',   '.txt'], 'rt');
+	if fd_w > 0
+		(weight_l1) = _readWeight(fd_w, weight_l1);
+		(weight_l2) = _readWeight(fd_w, weight_l2);
+		(weight_l3) = _readWeight(fd_w, weight_l3);
+		(weight_l4) = _readWeight(fd_w, weight_l4);
+	end
+
+	for i = 1:KNBDBSAMPLES
+		data_l = fscanf(fd_l, '%f');
+		data_v = fscanf(fd_v, '%f');
+
+		input_l(i, KPOSIN1:KPOSINN)   				     = data_l(KPOSIN1:KPOSINN);
+		input_v(i, KPOSIN1:KPOSINN)   				     = data_v(KPOSIN1:KPOSINN);
+		expected_l(i, KPOSOUT1-KPOSINN:KPOSOUTN-KPOSINN) = data_l(KPOSOUT1:KPOSOUTN);
+		expected_v(i, KPOSOUT1-KPOSINN:KPOSOUTN-KPOSINN) = data_v(KPOSOUT1:KPOSOUTN);
+	end
+	fclose(fd_l);
+	fclose(fd_v);
+	fclose(fd_w);
+
+// Rearrange the vectors in order to be compatible with the NN structure
+
+	input_l    = input_l';
+	input_v    = input_v';
+	expected_l = expected_l';
+	expected_v = expected_v';
+
+// - Read the weight sets
+
+function (weight) = _readWeight(fd, weight);
+	for i = 1:size(weight, 1)
+		weight(i, :) = fscanf(fd,'%f');
+	end
+	fscanf(fd,'%f');
+
+// Compute ...
+// ===========
+
+// Training loop
+// -------------
+
+// Compute the network (forward & back propagations)
+// Compute the quadratic error (using the Learning & the Verifying data sets)
+// Check the end conditions
+
+function (weight_l1, delta_l1, ...
+		  weight_l2, delta_l2, ...
+		  weight_l3, delta_l3, ...
+		  weight_l4, delta_l4, output_l4, ...
+		  display, error, errorPerSample, ...
+		  epoch, stop) = training(input_l1, weight_l1, delta_l1, activity_l1, output_l1, ...
+								  input_l2, weight_l2, delta_l2, activity_l2, output_l2, ...
+								  input_l3, weight_l3, delta_l3, activity_l3, output_l3, ...
+								  input_l4, weight_l4, delta_l4, activity_l4, output_l4, ...
+								  input_l, expected_l, input_v, expected_v, path, ...
+								  display, error, errorPerSample, gain, momentum, noise, epoch, stop);
+
+	if (stop == KFALSE)
+
+// Compute the network (forward & back propagations)
+// -------------------------------------------------
+
+// Random index (for pointing into the database)
+
+		for i = 1:KNBDBSAMPLES
+			index = round(rand(1) * (KNBDBSAMPLES - 1)) + 1;
+
+// Compute the network (forward propagation)
+// Add some noise to the inputs (only the inputs KPOSIN1+1:KPOSINN)
+//    if KMONOTONIC == KTRUE,  then noise on inputs in_2..in_n
+//    if KMONOTONIC == KFALSE, then noise on inputs in_1M..in_n
+
+			if KMONOTONIC == KTRUE
+				input(1:KPOSIN1)         = input_l(1:KPOSIN1, index);
+				input(1+KPOSIN1:KPOSINN) = input_l(1+KPOSIN1:KPOSINN, index) + (rand(KPOSINN-(1+KPOSIN1)+1, 1) - 0.5) * noise;
+			else
+				input(KPOSIN1:KPOSINN)   = input_l(  KPOSIN1:KPOSINN, index) + (rand(KPOSINN-KPOSIN1+1,     1) - 0.5) * noise;
+			end
+
+			(input_l1, output_l1, activity_l1, ...
+			 input_l2, output_l2, activity_l2, ...
+			 input_l3, output_l3, activity_l3, ...
+			 input_l4, output_l4, activity_l4) = mlp_forwardPropagation(input, ...
+															 			input_l1, weight_l1, output_l1, ...
+															 			input_l2, weight_l2, output_l2, ...
+															 			input_l3, weight_l3, output_l3, ...
+															 			input_l4, weight_l4, output_l4);
+
+			(weight_l1, delta_l1, ...
+			 weight_l2, delta_l2, ...
+			 weight_l3, delta_l3, ...
+			 weight_l4, delta_l4) = mlp_backPropagation(expected_l(:, index), gain, momentum, ...
+								     		  			input_l1, weight_l1, delta_l1, activity_l1, output_l1, ...
+								     		  			input_l2, weight_l2, delta_l2, activity_l2, output_l2, ...
+								     		  			input_l3, weight_l3, delta_l3, activity_l3, output_l3, ...
+  							     		  	  			input_l4, weight_l4, delta_l4, activity_l4, output_l4);
+
+		end
+
+// Compute the quadratic error (on the Learning & the Verifying data sets)
+// -----------------------------------------------------------------------
+
+		quadratic_l = 0;
+		quadratic_v = 0;
+		for i = 1:KNBDBSAMPLES
+
+// Compute the network using the Learning & the Verifying data sets (feed forward)
+// Compute the quadratic error
+
+			(input_l1, output_l1, activity_l1, ...
+			 input_l2, output_l2, activity_l2, ...
+			 input_l3, output_l3, activity_l3, ...
+			 input_l4, output_l4, activity_l4) = mlp_forwardPropagation(input_l(KPOSIN1:KPOSINN, i), ...
+															  			input_l1, weight_l1, output_l1, ...
+															  			input_l2, weight_l2, output_l2, ...
+															  			input_l3, weight_l3, output_l3, ...
+															  			input_l4, weight_l4, output_l4);
+
+			quadratic_l = quadratic_l + mlp_quadratic(output_l4, expected_l, i);
+
+			(input_l1, output_l1, activity_l1, ...
+			 input_l2, output_l2, activity_l2, ...
+			 input_l3, output_l3, activity_l3, ...
+			 input_l4, output_l4, activity_l4) = mlp_forwardPropagation(input_v(KPOSIN1:KPOSINN, i), ...
+															  			input_l1, weight_l1, output_l1, ...
+															  			input_l2, weight_l2, output_l2, ...
+															  			input_l3, weight_l3, output_l3, ...
+															  			input_l4, weight_l4, output_l4);
+
+			quadratic_v = quadratic_v + mlp_quadratic(output_l4, expected_v, i);
+
+			display(1, i) = input_v(KPOSIN1,   i);
+			display(2, i) = input_v(KPOSIN1+1, i);
+			display(3, i) = output_l4(1);
+			display(4, i) = output_l4(2);
+
+			errorPerSample(:, i) = expected_v(:, i) - output_l4(:);
+		end
+
+// Display the errors & test the end conditions
+// --------------------------------------------
+
+		quadratic_l = quadratic_l / KNBDBSAMPLES;
+		quadratic_v = quadratic_v / KNBDBSAMPLES;
+		error(1, epoch) = quadratic_l;
+		error(2, epoch) = quadratic_v;
+		sprintf('Epoch = %f, Q-Error Learning = %e Q-Error Verifying = %e\n', epoch, quadratic_l, quadratic_v)
+
+		epoch = epoch + 1;
+
+// Check the end conditions
+
+		if ((quadratic_v < KMAXERROR) || (epoch >= KNBEPOCH))
+			stop = KTRUE;
+
+// Display the sampling number, the error and save the weight sets
+
+			sprintf('Terminated!\n\n')
+			sprintf('Epoch = %f, Q-Error Learning = %e Q-Error Verifying = %e\n', epoch, quadratic_l, quadratic_v)
+
+			(dir, filename, ext) = fileparts(path);
+			fd = fopen( [dir, 'WW_file', '.txt'], 'wt');
+
+			fprintf(fd, [repmat('\t%g', 1, size(weight_l1, 2)) '\n'], weight_l1); fprintf(fd,'\n');
+			fprintf(fd, [repmat('\t%g', 1, size(weight_l2, 2)) '\n'], weight_l2); fprintf(fd,'\n');
+			fprintf(fd, [repmat('\t%g', 1, size(weight_l3, 2)) '\n'], weight_l3); fprintf(fd,'\n');
+			fprintf(fd, [repmat('\t%g', 1, size(weight_l4, 2)) '\n'], weight_l4); fprintf(fd,'\n');
+			fclose(fd);
+		end
+	end
+
+// Sliders
+// -------
+
+function drawSlider(gain, momentum, noise);
+	slider(sprintf('Gain: %.2g      \n', gain),      [gain],     [KMINGAIN, KMAXGAIN], '-', '', id=1);
+	slider(sprintf('Momentum: %.2g  \n', momentum),  [momentum], [0,        1],        '-', '', id=2);
+	slider(sprintf('Noise: %.2g %   \n', noise*100), [noise],    [0,        1],        '-', '', id=3);
+
+function (gain, momentum, noise) = dragSlider(gain, momentum, noise, id, nb, ix, x1);
+    if isempty(nb)
+		cancel;
+    end
+	switch id
+		case 1
+			gain = x1;
+		case 2
+			momentum = x1;
+		case 3
+			noise = x1;
+	end
+
+// Errors
+// ------
+
+function drawError(error);
+	i = 1; index = size(error, 2);
+	ix = index;
+	
+	if index > 0
+		if size(error, 2) > KMAXSCROLL
+			i = index - KMAXSCROLL + 1;
+			ix = KMAXSCROLL;
+		end
+
+		x = i:index;
+		y_l = error(1, i:index);
+		y_v = error(2, i:index);
+
+		dynamic = max(max(error(:, i:index))) * 2;
+		scale([i, index, 0, dynamic]);
+		plot(x, y_l, 'r');
+		plot(x, y_v, 'g');
+	end
+
+// Error per sample
+// ----------------
+
+function drawErrorPerSample(errorPerSample);
+	x  = 1:size(errorPerSample, 2);
+	y  = errorPerSample(1, :);
+	plot(x, y, 'b');
+	y  = errorPerSample(2, :);
+	plot(x, y, 'g');
+
+// Display the outputs
+// --------------------
+
+function output(display)
+	scale([-1, 1, -1, 1]);
+	x  = display(1, :);
+	y  = display(2, :);
+	c1 = display(3, :);
+	c2 = display(4, :);
+
+	for i = 1:KNBDBSAMPLES	
+		if (c1(i) > 0.75)
+			plot3(x(i), y(i),  c1(i), 'gx')
+		end
+		if (c2(i) > 0.75)
+			plot3(x(i), y(i), -c2(i), 'ro')
+		end
+		if ((c1(i) < 0.75) && (c2(i) < 0.75))
+			plot3(x(i), y(i),  c1(i), 'b.')
+			plot3(x(i), y(i),  c2(i), 'b.')
+		end
+	end
+
+// MLP specific routines
+// =====================
+
+// Compute the full MLP forward propagation
+// ----------------------------------------
+
+function (input_l1, output_l1, activity_l1, ...
+		  input_l2, output_l2, activity_l2, ...
+		  input_l3, output_l3, activity_l3, ...
+		  input_l4, output_l4, activity_l4) = mlp_forwardPropagation(data, ...
+													 				 input_l1, weight_l1, output_l1, ...
+													 				 input_l2, weight_l2, output_l2, ...
+													 				 input_l3, weight_l3, output_l3, ...
+													 				 input_l4, weight_l4, output_l4);
+
+	(input_l1, output_l1, activity_l1) = _layer(input_l1, weight_l1, data);
+	(input_l2, output_l2, activity_l2) = _layer(input_l2, weight_l2, output_l1);
+	(input_l3, output_l3, activity_l3) = _layer(input_l3, weight_l3, output_l2);
+	(input_l4, output_l4, activity_l4) = _layer(input_l4, weight_l4, output_l3);
+
+// Compute the full MLP back propagation
+// -------------------------------------
+
+function (weight_l1, delta_l1, ...
+		  weight_l2, delta_l2, ...
+		  weight_l3, delta_l3, ...
+		  weight_l4, delta_l4) = mlp_backPropagation(expected, gain, momentum, ...
+										   			 input_l1, weight_l1, delta_l1, activity_l1, output_l1, ...
+										   			 input_l2, weight_l2, delta_l2, activity_l2, output_l2, ...
+										   			 input_l3, weight_l3, delta_l3, activity_l3, output_l3, ...
+										   			 input_l4, weight_l4, delta_l4, activity_l4, output_l4);
+
+	L4_error  = (expected - output_l4)         .* _d_neuron_A(activity_l4);
+	L3_error  = weight_l4' * L4_error;  
+	L3_error  = L3_error(1:size(output_l3, 1)) .* _d_neuron_A(activity_l3);
+	L2_error  = weight_l3' * L3_error;  
+	L2_error  = L2_error(1:size(output_l2, 1)) .* _d_neuron_A(activity_l2);
+	L1_error  = weight_l2' * L2_error;  
+	L1_error  = L1_error(1:size(output_l1, 1)) .* _d_neuron_A(activity_l1);
+
+	delta_l4  = gain .* (L4_error * input_l4') + momentum .* delta_l4;
+	delta_l3  = gain .* (L3_error * input_l3') + momentum .* delta_l3;
+	delta_l2  = gain .* (L2_error * input_l2') + momentum .* delta_l2;
+	delta_l1  = gain .* (L1_error * input_l1') + momentum .* delta_l1;
+
+	weight_l4 = weight_l4 + delta_l4;
+	weight_l3 = weight_l3 + delta_l3;
+	weight_l2 = weight_l2 + delta_l2;
+	weight_l1 = weight_l1 + delta_l1;
+
+// Compute the full MLP quadratic error
+// ------------------------------------
+
+function (error) = mlp_quadratic(output, expected, index);
+	error = 0;
+	for i = 1:size(output, 1)
+		error = error + ((expected(i, index) - output(i, 1))^2) / (2 * size(output, 1));
+	end
+
+// - Compute the a NN layer
+
+function (input, output, activity) = _layer(input, weight, data);
+	input(1:size(input, 1)-1, 1) = data;
+	activity                     = weight * input;
+	output                       = _neuron_A(activity);
+
+// - Compute the neuron function y = tanh(x)
+
+function (output) = _neuron_A(activity);
+	output = tanh(activity);
+
+// - Compute the dy/dx of the neuron function
+
+function (output) = _d_neuron_A(activity);
+	output = (1-tanh(activity)) .* (1+tanh(activity));
+
+@}

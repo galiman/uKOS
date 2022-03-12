@@ -1,0 +1,247 @@
+
+//------------------------------------------------------------------------
+// Author:	Franzi Edo.	The 2015-04-20
+// Modifs: 
+//
+// SVN:
+// $Author:: efr               $:  Author of last commit
+// $Rev:: 161                  $:  Revision of last commit
+// $Date:: 2017-06-15 15:01:25#$:  Date of last commit		
+//
+// Project:	uKOS
+// Goal:	Display the 3 analog value
+//			- VBat
+//			- Temperature
+//			- VRef
+//			This viewer is an adaptation of the one provided by
+//			Calerga Sarl, www.calerga.com.
+//			Thanks to Calerga Sarl for their advices.
+//
+//   (c) 1992-2017, Franzi Edo.
+//   --------------------------
+//                                              __ ______  _____
+//   Franzi Edo.                         __  __/ //_/ __ \/ ___/
+//   5-Route de Cheseaux                / / / / ,< / / / /\__ \
+//   CH 1400 Cheseaux-Noréaz           / /_/ / /| / /_/ /___/ /
+//                                     \__,_/_/ |_\____//____/
+//   edo.franzi@ukos.ch
+//
+//   This program is free software: you can redistribute it and/or modify
+//   it under the terms of the GNU Affero General Public License as published by
+//   the Free Software Foundation, either version 3 of the License, or
+//   (at your option) any later version.
+//
+//   This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+//   GNU Affero General Public License for more details.
+//
+//   You should have received a copy of the GNU Affero General Public License
+//   along with this program. If not, see <http://www.gnu.org/licenses/>.
+//
+//------------------------------------------------------------------------
+
+title "adc0 display"
+
+version
+{@
+Version 1.0, 18 August 2015
+
+Copyright 2017, uKOS www.ukos.ch
+@}
+
+help
+{@
+This SQ file allows to display the adc0 analog values.
+
+1. Launch this Sysquake program
+
+2. In a terminal type: dump DBYLFG1D
+   !!! 30seconds of timeout
+
+3. From the uKOS serial terminal type:
+   sloader (and download the xyz.s3)
+
+@}
+
+variable	data, index, thr
+
+init		(thr) = init()
+idle		(data, index, _idlerate) = idle()
+terminate	terminate(thr)
+
+figure "VBat"
+	draw drawVBat(index, data)
+
+figure "Temperature"
+	draw drawTemperature(index, data)
+
+figure "VRef"
+	draw drawVRef(index, data)
+
+functions
+{@
+
+define	KPIPE			= false						// true = PIPE, false = FILE
+define	KNBNUMBER		= 4							// 4 digits
+define	KSZNUMBER		= 15						// -123456789.11_
+define	KSZBUFFER		= KNBNUMBER*KSZNUMBER		// Size of the buffer before to read it
+define	KVTIM			= 1							// Position number for the Time
+define	KVBAT			= 2							// Position number for the VBat
+define	KTEMP			= 3							// Position number for the Temperature
+define	KVREF			= 4							// Position number for the VRef
+
+define	KNBSAMPLES		= 200						// Number of samples for the horizontal scrol
+define	KVBATMIN		= 2.9						// Min boundary for VBat
+define	KVBATMAX		= 3.5						// Max boundary for VBat
+define	KTEMPMIN		= 45						// Min boundary for Temperature
+define	KTEMPMAX		= 80						// Max boundary for Temperature
+define	KVREFMIN		= 1.2						// Min boundary for VRef
+define	KVREFMAX		= 1.4						// Max boundary for VRef
+
+// Thread acquisition
+// ------------------
+
+function acquisition()
+	global exit dataNew indexNew semaNew semaUsed
+
+	fd = -1;
+	if (KPIPE)
+		unix('mkfifo tmp/pipe');
+	end;
+	while (fd < 0)
+		fd = fopen('tmp/pipe');
+	end;
+
+// Try to read blocs of data containing a complete line
+// KSZBUFFER should be adapted to contain a complete line
+
+	indexNew = 0;
+	vect = zeros(1, KNBNUMBER);
+	while (~exit)
+		while (fionread(fd) > KSZBUFFER)
+			line = fgetl(fd);
+			vect = sscanf(line, '%f')';
+		end;
+
+// Keep only the last KNBSAMPLES
+// If there is not a new line, then, use the last one
+
+		indexNew = indexNew + 1;
+		dataNew = [dataNew; vect];
+		szData = size(dataNew, 1);
+		if szData > KNBSAMPLES
+			dataNew = dataNew(2:szData, :);
+		end
+
+// Signal imgNew is ready
+// Wait until imgNew is used
+
+		semaphoreunlock(semaNew);
+		semaphorelock(semaUsed);
+	end;
+
+// Delete the 2 semaphores
+// Close the file
+
+	semaphoredelete(semaNew);
+	semaphoredelete(semaUsed);
+	fclose(fdImage);
+
+// Initialisations
+// ---------------
+
+function (thr) = init()
+	global exit dataNew indexNew semaNew semaUsed
+
+	unix('rm -rf tmp/pipe');
+	subplots(['VBat\nTemperature\nVRef']);
+
+	indexNew = 0;
+	dataNew  = [];
+	exit     = false;
+	semaNew  = semaphorenew;
+	semaUsed = semaphorenew;
+
+// No imgNew until unlocked by thread
+// The thread will be blocked until the image is used
+
+	semaphorelock(semaNew);
+	semaphorelock(semaUsed);
+	thr = threadnew(@acquisition, StackSize=10e4);
+
+// Terminate
+// ---------
+
+function terminate(thr)
+
+// Kill the thread acquisition
+
+	threadkill(thr);
+
+// Compute ...
+// ===========
+
+// idle loop
+// ---------
+
+function (data, index, idlerate) = idle()
+	global dataNew indexNew semaNew semaUsed
+
+	idlerate = 0.000001;
+
+// Give up until imgNew is ready
+// Use the imgNew to create the img for the display
+// Signal imNew is used
+
+	if (semaphorelock(semaNew))
+		data  = dataNew;
+		index = indexNew;
+		semaphoreunlock(semaUsed);
+	else
+
+// Prevent a useless redraw
+
+		cancel(false);
+	end;
+
+// draw the 3 analog values (with horizontal scroll)
+// -------------------------------------------------
+
+function drawVBat(index, data);
+	i = 1; ix = index;
+	if index > 0
+		if index > KNBSAMPLES
+			i = index - KNBSAMPLES + 1;
+			ix = KNBSAMPLES;
+		end
+		scale([i, index, KVBATMIN, KVBATMAX]);
+		x = i:index; y = data(1:ix, KVBAT)';
+		plot(x, y, 'r');
+	end
+
+function drawTemperature(index, data);
+	i = 1; ix = index;
+	if index > 0
+		if index > KNBSAMPLES
+			i = index - KNBSAMPLES + 1;
+			ix = KNBSAMPLES;
+		end
+		scale([i, index, KTEMPMIN, KTEMPMAX]);
+		x = i:index; y = data(1:ix, KTEMP)';
+		plot(x, y, 'g');
+	end
+
+function drawVRef(index, data);
+	i = 1; ix = index;
+	if index > 0
+		if index > KNBSAMPLES
+			i = index - KNBSAMPLES + 1;
+			ix = KNBSAMPLES;
+		end
+		scale([i, index, KVREFMIN, KVREFMAX]);
+		x = i:index; y = data(1:ix, KVREF)';
+		plot(x, y, 'b');
+	end
+
+@}
